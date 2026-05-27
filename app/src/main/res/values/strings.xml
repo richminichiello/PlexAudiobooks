@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Plex Audiobooks</string>
+
+    <!-- Auth -->
+    <string name="auth_tagline">Your Plex audiobook library, beautifully played.</string>
+    <string name="sign_in_with_plex">Sign in with Plex</string>
+    <string name="auth_preparing">Preparing sign-in…</string>
+    <string name="auth_verifying">Verifying your account…</string>
+
+    <!-- Server setup -->
+    <string name="connect_to_server">Connect to Plex Server</string>
+    <string name="server_url_hint">http://192.168.1.x:32400</string>
+    <string name="connect">Connect</string>
+    <string name="error_url_required">Please enter your server URL</string>
+
+    <!-- Library -->
+    <string name="my_library">My Library</string>
+    <string name="continue_listening">CONTINUE LISTENING</string>
+    <string name="library_empty">No audiobooks found.\nPull down to refresh.</string>
+
+    <!-- Detail -->
+    <string name="about">About</string>
+    <string name="no_summary">No description available.</string>
+    <string name="play">Play</string>
+    <string name="download">Download</string>
+    <string name="remove_download">Remove Download</string>
+    <string name="downloading_percent">Downloading… %d%%</string>
+    <string name="download_failed">Download failed. Please try again.</string>
+    <string name="progress_format">%s of %s</string>
+    <string name="duration_hours_mins">%dh %dm</string>
+    <string name="duration_mins">%dm</string>
+    <string name="chapters_count">%d chapters</string>
+
+    <!-- Player -->
+    <string name="now_playing">Now Playing</string>
+    <string name="offline">OFFLINE</string>
+    <string name="close">Close</string>
+    <string name="cover_art">Cover art</string>
+    <string name="previous_chapter">Previous chapter</string>
+    <string name="next_chapter">Next chapter</string>
+    <string name="skip_back">Skip back</string>
+    <string name="skip_forward">Skip forward</string>
+    <string name="play_pause">Play / Pause</string>
+    <string name="chapters">Chapters</string>
+
+    <!-- Downloads -->
+    <string name="downloads">Downloads</string>
+    <string name="no_downloads">No books downloaded yet.\nOpen a book and tap Download.</string>
+    <string name="delete">Delete</string>
+
+    <string name="cancel">Cancel sign-in</string>
+    <string name="no_servers_found">No servers found on your account.</string>
+    <string name="enter_manually">Enter server address manually</string>
+    <string name="auth_waiting">Sign in at app.plex.tv, then return here.</string>
+
+    <!-- Settings - new -->
+    <string name="offline_buffer_hours">Offline buffer size</string>
+    <string name="clear_cache">Clear downloaded files</string>
+    <string name="clear_cache_confirm">This will delete all downloaded audiobooks from your device. Are you sure?</string>
+    <string name="clear">Clear</string>
+    <string name="cache_cleared">Downloaded files cleared</string>
+
+    <!-- Settings -->
+    <string name="settings">Settings</string>
+    <string name="sign_out">Sign Out</string>
+    <string name="skip_forward_seconds">Skip forward (seconds)</string>
+    <string name="skip_back_seconds">Skip back (seconds)</string>
+    <string name="server_url_label">Server URL</string>
+    <string name="account">Account</string>
+    <string name="playback">Playback</string>
+    <string name="completed">Completed</string>
+    <string name="mark_as_read">Mark as Read</string>
+    <string name="mark_as_unread">Mark as Unread</string>
+</resources>

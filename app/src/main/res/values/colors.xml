@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Plex brand orange -->
+    <color name="colorPrimary">#E5A00D</color>
+    <color name="colorOnPrimary">#000000</color>
+    <color name="colorPrimaryContainer">#FFF0C2</color>
+    <color name="colorSecondary">#CC7B19</color>
+
+    <!-- Text -->
+    <color name="text_primary">#1C1C1E</color>
+    <color name="text_secondary">#636366</color>
+
+    <!-- UI -->
+    <color name="chapter_active_bg">#FFF8E7</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="surface_variant">#F2F2F7</color>
+    <color name="ic_launcher_background">#000000</color>
+</resources>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Allow cleartext HTTP globally. Plex home servers almost always run
+        plain HTTP on port 32400, and local IP addresses can't be enumerated
+        in Android's domain-config (it requires hostnames, not CIDR ranges).
+
+        Remote Plex connections use HTTPS automatically because Plex generates
+        HTTPS URIs for remote/relay connections in the resources API.
+        plex.tv itself is always HTTPS.
+
+        This matches what Chronicle and other Plex clients do.
+    -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Plex.tv auth APIs always use HTTPS - no cleartext needed -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">plex.tv</domain>
+        <domain includeSubdomains="true">plex.direct</domain>
+    </domain-config>
+</network-security-config>

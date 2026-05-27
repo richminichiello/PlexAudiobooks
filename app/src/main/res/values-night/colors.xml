@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#E5A00D</color>
+    <color name="colorOnPrimary">#000000</color>
+    <color name="colorPrimaryContainer">#4A3300</color>
+    <color name="colorSecondary">#F0B429</color>
+    <color name="text_primary">#EBEBF5</color>
+    <color name="text_secondary">#AEAEB2</color>
+    <color name="chapter_active_bg">#2C2200</color>
+    <color name="surface">#1C1C1E</color>
+    <color name="surface_variant">#2C2C2E</color>
+</resources>

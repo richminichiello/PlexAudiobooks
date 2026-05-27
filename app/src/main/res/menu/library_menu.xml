@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <item
+        android:id="@+id/action_search"
+        android:title="@string/my_library"
+        android:icon="@android:drawable/ic_menu_search"
+        app:showAsAction="ifRoom|collapseActionView"
+        app:actionViewClass="androidx.appcompat.widget.SearchView" />
+
+    <item
+        android:id="@+id/action_view_toggle"
+        android:title="Toggle View"
+        android:icon="@android:drawable/ic_dialog_info"
+        app:showAsAction="ifRoom" />
+
+    <item
+        android:id="@+id/action_sort"
+        android:title="Sort"
+        app:showAsAction="never">
+        <menu>
+            <item android:id="@+id/sort_title"    android:title="By Title" />
+            <item android:id="@+id/sort_author"   android:title="By Author" />
+            <item android:id="@+id/sort_duration" android:title="By Length" />
+            <item android:id="@+id/sort_added"    android:title="By Date Added" />
+        </menu>
+    </item>
+
+    <item
+        android:id="@+id/action_hide_completed"
+        android:title="Hide Completed"
+        android:checkable="true"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_downloads"
+        android:title="@string/downloads"
+        android:icon="@drawable/ic_download"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_settings"
+        android:title="@string/settings"
+        app:showAsAction="never" />
+
+</menu>

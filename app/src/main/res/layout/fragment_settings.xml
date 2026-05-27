@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:title="@string/settings"
+        android:navigationIcon="@drawable/ic_arrow_back" />
+
+    <androidx.core.widget.NestedScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <!-- ── Account ─────────────────────────────────────────────── -->
+            <TextView style="@style/SettingsSectionHeader" android:text="@string/account" />
+
+            <LinearLayout style="@style/SettingsRow">
+                <TextView style="@style/SettingsLabel" android:text="Signed in as" />
+                <TextView android:id="@+id/tvUsername" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/rowServerUrl" style="@style/SettingsRowClickable">
+                <TextView style="@style/SettingsLabel" android:text="@string/server_url_label" />
+                <TextView android:id="@+id/tvServerUrl" style="@style/SettingsValueSmall"
+                    android:maxLines="1" android:ellipsize="start" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <!-- ── Playback ────────────────────────────────────────────── -->
+            <TextView style="@style/SettingsSectionHeader" android:text="@string/playback" />
+
+            <LinearLayout android:id="@+id/rowSkipForward" style="@style/SettingsRowClickable">
+                <TextView style="@style/SettingsLabel" android:text="@string/skip_forward_seconds" />
+                <TextView android:id="@+id/tvSkipForward" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/rowSkipBack" style="@style/SettingsRowClickable">
+                <TextView style="@style/SettingsLabel" android:text="@string/skip_back_seconds" />
+                <TextView android:id="@+id/tvSkipBack" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <!-- ── Downloads ──────────────────────────────────────────── -->
+            <TextView style="@style/SettingsSectionHeader" android:text="@string/downloads" />
+
+            <LinearLayout android:id="@+id/rowDownloadLocation" style="@style/SettingsRowClickable">
+                <TextView style="@style/SettingsLabel" android:text="Download location" />
+                <TextView android:id="@+id/tvDownloadLocation" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/rowDownloadHours" style="@style/SettingsRowClickable">
+                <TextView style="@style/SettingsLabel" android:text="@string/offline_buffer_hours" />
+                <TextView android:id="@+id/tvDownloadHours" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <LinearLayout android:id="@+id/rowClearCache" style="@style/SettingsRowClickable">
+                <TextView style="@style/SettingsLabel" android:text="@string/clear_cache" />
+                <TextView android:id="@+id/tvStorageUsed" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <View style="@style/SettingsDivider" />
+
+            <!-- ── About ──────────────────────────────────────────────── -->
+            <TextView style="@style/SettingsSectionHeader" android:text="About" />
+
+            <LinearLayout style="@style/SettingsRow">
+                <TextView style="@style/SettingsLabel" android:text="Version" />
+                <TextView android:id="@+id/tvVersion" style="@style/SettingsValue" />
+            </LinearLayout>
+
+            <!-- ── Sign out ───────────────────────────────────────────── -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSignOut"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:layout_margin="16dp"
+                android:text="@string/sign_out"
+                android:textColor="?attr/colorError"
+                app:strokeColor="?attr/colorError" />
+
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+</LinearLayout>
