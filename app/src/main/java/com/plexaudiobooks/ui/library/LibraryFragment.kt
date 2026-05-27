@@ -182,11 +182,12 @@ class LibraryFragment : Fragment() {
         if (lm !is GridLayoutManager) return
         lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
-                val cc = continueHeader.itemCount
-                val sc = completedSection.itemCount
+                // Position 0 is always the Continue Listening header (even when hidden)
+                // Position 1..n-1 are book grid items
+                // The completed section is always the last item
                 val total = concatAdapter.itemCount
-                // Header rows (Continue Listening) and footer rows (Completed) span full width
-                return if (position < cc || position >= total - sc) lm.spanCount else 1
+                val sc = completedSection.itemCount
+                return if (position == 0 || position >= total - sc) lm.spanCount else 1
             }
         }
     }
@@ -200,7 +201,7 @@ class LibraryFragment : Fragment() {
     private fun observeData() {
         // Continue Listening
         lifecycleScope.launch {
-            viewModel.continueListening.collectLatest { items ->
+            viewModel.continueListening.collect { items ->
                 continueHeader.submitList(items)
             }
         }

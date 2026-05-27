@@ -29,11 +29,16 @@ class ContinueListeningHeaderAdapter(
         val wasEmpty = items.isEmpty()
         items = list
         innerAdapter?.submitList(list)
-        if (wasEmpty && list.isNotEmpty()) notifyItemInserted(0)
-        else if (!wasEmpty && list.isEmpty()) notifyItemRemoved(0)
+        when {
+            wasEmpty && list.isNotEmpty() -> notifyItemInserted(0)
+            !wasEmpty && list.isEmpty()   -> notifyItemRemoved(0)
+            list.isNotEmpty()             -> notifyItemChanged(0)
+        }
     }
 
-    override fun getItemCount() = if (items.isEmpty()) 0 else 1
+    // KEY FIX: always report 1 item so the ViewHolder is always created.
+    // The ViewHolder hides itself when the list is empty.
+    override fun getItemCount() = 1
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val binding = HeaderContinueListeningBinding.inflate(
@@ -49,7 +54,19 @@ class ContinueListeningHeaderAdapter(
         return VH(binding)
     }
 
-    override fun onBindViewHolder(holder: VH, position: Int) {}
+    override fun onBindViewHolder(holder: VH, position: Int) {
+        // Show the header only when there are items; hide it when empty so it
+        // takes up no space. The ViewHolder always exists — only visibility changes.
+        holder.itemView.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+        holder.itemView.layoutParams = if (items.isEmpty()) {
+            RecyclerView.LayoutParams(0, 0)
+        } else {
+            RecyclerView.LayoutParams(
+                RecyclerView.LayoutParams.MATCH_PARENT,
+                RecyclerView.LayoutParams.WRAP_CONTENT
+            )
+        }
+    }
 
     class VH(binding: HeaderContinueListeningBinding) :
         RecyclerView.ViewHolder(binding.root)
