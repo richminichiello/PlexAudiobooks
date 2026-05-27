@@ -92,18 +92,17 @@ interface CachedLibraryPagingDao {
 
     // Books with progress but not completed (Continue Listening)
     @Query("""
-        SELECT cl.ratingKey, cl.title, cl.author, cl.thumbPath,
-               cl.durationMs, cl.viewOffset, cl.addedAt,
-               COALESCE(cl.completed, 0) AS completed,
-               pp.positionMs, pp.lastUpdated
-        FROM cached_library cl
-        INNER JOIN playback_progress pp ON cl.ratingKey = pp.ratingKey
-        WHERE pp.positionMs > 0
-          AND pp.positionMs < cl.durationMs
-          AND (cl.completed = 0 OR cl.completed IS NULL)
-        ORDER BY pp.lastUpdated DESC
-        LIMIT 20
-    """)
+    SELECT cl.ratingKey, cl.title, cl.author, cl.thumbPath,
+           cl.durationMs, cl.viewOffset, cl.addedAt,
+           COALESCE(cl.completed, 0) AS completed,
+           pp.positionMs, pp.lastUpdated
+    FROM cached_library cl
+    INNER JOIN playback_progress pp ON CAST(cl.ratingKey AS TEXT) = CAST(pp.ratingKey AS TEXT)
+    WHERE pp.positionMs > 0
+      AND (cl.completed = 0 OR cl.completed IS NULL)
+    ORDER BY pp.lastUpdated DESC
+    LIMIT 20
+""")
     fun getContinueListening(): Flow<List<ContinueListeningItem>>
 
     // Completed books

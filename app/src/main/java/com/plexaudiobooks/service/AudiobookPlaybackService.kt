@@ -629,7 +629,14 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         val ratingKey = currentRatingKey ?: return
         val key = currentKey ?: return
         val pos = exoPlayer.currentPosition  // always absolute
-        val dur = exoPlayer.duration.takeIf { it > 0 } ?: return
+        // exoPlayer.duration is -1 until buffered — fall back to the last known chapter
+        // end or skip saving rather than storing a broken duration of 0/-1
+        val dur = when {
+            exoPlayer.duration > 0 -> exoPlayer.duration
+            currentChapters.isNotEmpty() -> currentChapters.last().endMs
+            else -> return
+        }
+        if (pos <= 0) return  // don't save a zero position — nothing meaningful to resume
         repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, pos, dur)
         repository.reportProgressToPlex(ratingKey, key, pos, dur, state)
     }
