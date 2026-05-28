@@ -184,18 +184,14 @@ class LibraryFragment : Fragment() {
         if (lm !is GridLayoutManager) return
         lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
-                // If the header is hidden (empty list), its 0x0 slot is at position 0
-                // but we still need books starting at position 1 to use span=1 (grid cells)
-                // Only give full span to position 0 if the header actually has content
-                val headerHasContent = continueHeader.hasContent()
-                if (position == 0 && headerHasContent) return lm.spanCount
-
-                // Completed section at the end always spans full width
+                // Position 0 is always the Continue Listening header (even when hidden)
+                if (position == 0) return lm.spanCount
+                // Guard against completedSection not yet initialized
+                if (!::completedSection.isInitialized) return 1
+                // Last item(s) belong to the completed section — also full width
                 val sc = completedSection.itemCount
                 val total = concatAdapter.itemCount
-                if (sc > 0 && position >= total - sc) return lm.spanCount
-
-                return 1
+                return if (sc > 0 && position >= total - sc) lm.spanCount else 1
             }
         }
     }
