@@ -480,8 +480,9 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
             updatePlaybackState()
             if (playbackState == Player.STATE_ENDED) {
                 serviceScope.launch {
-                    val dur = exoPlayer.duration.takeIf { it > 0 } ?: return@launch
                     saveProgress("stopped")
+                    // Book finished naturally — always mark complete regardless of threshold
+                    currentRatingKey?.let { repository.setCompleted(it, true) }
                 }
                 stateUpdateJob?.cancel()
                 progressJob?.cancel()
@@ -628,17 +629,21 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     private suspend fun saveProgress(state: String) {
         val ratingKey = currentRatingKey ?: return
         val key = currentKey ?: return
-        val pos = exoPlayer.currentPosition  // always absolute
-        // exoPlayer.duration is -1 until buffered — fall back to the last known chapter
-        // end or skip saving rather than storing a broken duration of 0/-1
+        val pos = exoPlayer.currentPosition
         val dur = when {
             exoPlayer.duration > 0 -> exoPlayer.duration
             currentChapters.isNotEmpty() -> currentChapters.last().endMs
             else -> return
         }
-        if (pos <= 0) return  // don't save a zero position — nothing meaningful to resume
+        if (pos <= 0) return
         repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, pos, dur)
         repository.reportProgressToPlex(ratingKey, key, pos, dur, state)
+
+        // Auto-complete: mark book finished if within the configured threshold
+        val thresholdMs = session.autoCompleteMinutes * 60 * 1000L
+        if (dur > 0 && (dur - pos) <= thresholdMs) {
+            repository.setCompleted(ratingKey, true)
+        }
     }
 
     // ── Read-ahead ────────────────────────────────────────────────────────────

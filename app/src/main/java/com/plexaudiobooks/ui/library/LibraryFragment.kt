@@ -84,6 +84,7 @@ class LibraryFragment : Fragment() {
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) }
         )
         bookAdapter.isGridMode = isGridMode
+        completedSection.isGridMode = isGridMode
 
         completedSection = CompletedSectionAdapter(
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) },
@@ -173,6 +174,7 @@ class LibraryFragment : Fragment() {
         isGridMode = !isGridMode
         viewModel.session.libraryViewMode = if (isGridMode) "grid" else "list"
         bookAdapter.isGridMode = isGridMode
+        completedSection.isGridMode = isGridMode
         val lm = makeLayoutManager()
         applySpanSizeLookup(lm)
         binding.rvBooks.layoutManager = lm
@@ -182,12 +184,18 @@ class LibraryFragment : Fragment() {
         if (lm !is GridLayoutManager) return
         lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
-                // Position 0 is always the Continue Listening header (even when hidden)
-                // Position 1..n-1 are book grid items
-                // The completed section is always the last item
-                val total = concatAdapter.itemCount
+                // If the header is hidden (empty list), its 0x0 slot is at position 0
+                // but we still need books starting at position 1 to use span=1 (grid cells)
+                // Only give full span to position 0 if the header actually has content
+                val headerHasContent = continueHeader.hasContent()
+                if (position == 0 && headerHasContent) return lm.spanCount
+
+                // Completed section at the end always spans full width
                 val sc = completedSection.itemCount
-                return if (position == 0 || position >= total - sc) lm.spanCount else 1
+                val total = concatAdapter.itemCount
+                if (sc > 0 && position >= total - sc) return lm.spanCount
+
+                return 1
             }
         }
     }
@@ -201,8 +209,8 @@ class LibraryFragment : Fragment() {
     private fun observeData() {
         // Continue Listening
         lifecycleScope.launch {
-            viewModel.continueListening.collect { items ->
-                continueHeader.submitList(items)
+            viewModel.downloadedKeys.collect { keys ->
+                bookAdapter.downloadedKeys = keys
             }
         }
 

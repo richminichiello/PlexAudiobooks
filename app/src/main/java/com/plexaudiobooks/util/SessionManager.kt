@@ -40,6 +40,7 @@ class SessionManager @Inject constructor(
         private const val KEY_LIBRARY_VIEW_MODE  = "library_view_mode"   // "grid" or "list"
         private const val KEY_LIBRARY_SORT       = "library_sort"        // "title","author","duration","added"
         private const val KEY_HIDE_COMPLETED     = "hide_completed"
+        private const val KEY_AUTO_COMPLETE_MINUTES = "auto_complete_minutes"
     }
 
     private val masterKey = MasterKey.Builder(context)
@@ -248,6 +249,11 @@ class SessionManager @Inject constructor(
         get() = prefs.getBoolean(KEY_HIDE_COMPLETED, false)
         set(value) = prefs.edit().putBoolean(KEY_HIDE_COMPLETED, value).apply()
 
+
+
+    var autoCompleteMinutes: Int
+        get() = prefs.getInt(KEY_AUTO_COMPLETE_MINUTES, 5)
+        set(value) = prefs.edit().putInt(KEY_AUTO_COMPLETE_MINUTES, value).apply()
     // ── Logout ────────────────────────────────────────────────────────────────
 
     fun logout() {
