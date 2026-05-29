@@ -290,8 +290,18 @@ class PlexRepository @Inject constructor(
                 if (resp.isSuccessful) {
                     val items = resp.body()?.mediaContainer?.metadata ?: emptyList()
                     val books = items.map { it.toAudioBook() }
+
+                    // Preserve completed flags before wiping the cache
+                    val completedKeys = libraryDao.getCompletedKeys().toSet()
+
                     libraryDao.clearAll()
                     libraryDao.insertAll(items.map { it.toCachedEntity() })
+
+                    // Re-apply completed flags
+                    completedKeys.forEach { key ->
+                        libraryDao.setCompleted(key, true)
+                    }
+
                     Result.Success(books)
                 } else {
                     Result.Error("Failed to load library: ${resp.code()}")

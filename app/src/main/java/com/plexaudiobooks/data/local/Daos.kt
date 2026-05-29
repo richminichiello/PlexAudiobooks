@@ -61,6 +61,9 @@ interface CachedLibraryDao {
 
     @Query("UPDATE cached_library SET completed = :completed WHERE ratingKey = :ratingKey")
     suspend fun setCompleted(ratingKey: String, completed: Boolean)
+
+    @Query("SELECT ratingKey FROM cached_library WHERE completed = 1")
+    suspend fun getCompletedKeys(): List<String>
 }
 
 // Paging 3 support — returns a PagingSource so the library grid loads
@@ -68,19 +71,19 @@ interface CachedLibraryDao {
 @Dao
 interface CachedLibraryPagingDao {
 
-    @Query("SELECT * FROM cached_library ORDER BY title ASC")
+    @Query("SELECT * FROM cached_library WHERE completed = 0 OR completed IS NULL ORDER BY title ASC")
     fun getPagedLibrary(): androidx.paging.PagingSource<Int, CachedLibraryEntity>
 
-    @Query("SELECT * FROM cached_library ORDER BY title ASC")
+    @Query("SELECT * FROM cached_library WHERE completed = 0 OR completed IS NULL ORDER BY title ASC")
     fun getPagedByTitle(): androidx.paging.PagingSource<Int, CachedLibraryEntity>
 
-    @Query("SELECT * FROM cached_library ORDER BY LOWER(author) ASC, title ASC")
+    @Query("SELECT * FROM cached_library WHERE completed = 0 OR completed IS NULL ORDER BY LOWER(author) ASC, title ASC")
     fun getPagedByAuthor(): androidx.paging.PagingSource<Int, CachedLibraryEntity>
 
-    @Query("SELECT * FROM cached_library ORDER BY durationMs ASC")
+    @Query("SELECT * FROM cached_library WHERE completed = 0 OR completed IS NULL ORDER BY durationMs ASC")
     fun getPagedByDuration(): androidx.paging.PagingSource<Int, CachedLibraryEntity>
 
-    @Query("SELECT * FROM cached_library ORDER BY addedAt DESC")
+    @Query("SELECT * FROM cached_library WHERE completed = 0 OR completed IS NULL ORDER BY addedAt DESC")
     fun getPagedByDateAdded(): androidx.paging.PagingSource<Int, CachedLibraryEntity>
 
     @Query("SELECT * FROM cached_library WHERE completed = 0 OR completed IS NULL ORDER BY title ASC")
