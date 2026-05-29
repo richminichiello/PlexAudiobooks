@@ -18,6 +18,7 @@ import com.plexaudiobooks.databinding.FragmentLibraryBinding
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -84,7 +85,6 @@ class LibraryFragment : Fragment() {
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) }
         )
         bookAdapter.isGridMode = isGridMode
-        completedSection.isGridMode = isGridMode
 
         completedSection = CompletedSectionAdapter(
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) },
@@ -104,6 +104,7 @@ class LibraryFragment : Fragment() {
                     .show()
             }
         )
+        completedSection.isGridMode = isGridMode
 
         // ConcatAdapter: Continue Listening header | paged books | completed section
         // GridLayoutManager with span control so header/footer take full width
@@ -162,9 +163,9 @@ class LibraryFragment : Fragment() {
                     true
                 }
                 R.id.action_downloads ->
-                    { findNavController().navigate(R.id.action_library_to_downloads); true }
+                { findNavController().navigate(R.id.action_library_to_downloads); true }
                 R.id.action_settings  ->
-                    { findNavController().navigate(R.id.action_library_to_settings); true }
+                { findNavController().navigate(R.id.action_library_to_settings); true }
                 else -> false
             }
         }
@@ -178,7 +179,6 @@ class LibraryFragment : Fragment() {
         val lm = makeLayoutManager()
         applySpanSizeLookup(lm)
         binding.rvBooks.layoutManager = lm
-        completedSection.isGridMode = isGridMode
     }
 
     private fun applySpanSizeLookup(lm: androidx.recyclerview.widget.RecyclerView.LayoutManager) {
@@ -203,8 +203,8 @@ class LibraryFragment : Fragment() {
     private fun observeData() {
         // Continue Listening
         lifecycleScope.launch {
-            viewModel.downloadedKeys.collect { keys ->
-                bookAdapter.downloadedKeys = keys
+            viewModel.continueListening.collect { items ->
+                continueHeader.submitList(items)
             }
         }
 
@@ -220,7 +220,7 @@ class LibraryFragment : Fragment() {
 
         // Offline badges
         lifecycleScope.launch {
-            viewModel.downloadedKeys.collectLatest { keys ->
+            viewModel.downloadedKeys.collect { keys ->
                 bookAdapter.downloadedKeys = keys
             }
         }
