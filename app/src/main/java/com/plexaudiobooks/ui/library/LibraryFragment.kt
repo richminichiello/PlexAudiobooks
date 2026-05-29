@@ -1,5 +1,5 @@
 package com.plexaudiobooks.ui.library
-
+//Anchor date: 5/29/2026 Time: 8:59 ET
 import android.os.Bundle
 import android.view.*
 import androidx.appcompat.app.AlertDialog
@@ -178,17 +178,15 @@ class LibraryFragment : Fragment() {
         val lm = makeLayoutManager()
         applySpanSizeLookup(lm)
         binding.rvBooks.layoutManager = lm
+        completedSection.isGridMode = isGridMode
     }
 
     private fun applySpanSizeLookup(lm: androidx.recyclerview.widget.RecyclerView.LayoutManager) {
         if (lm !is GridLayoutManager) return
         lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
-                // Position 0 is always the Continue Listening header (even when hidden)
+                if (!::completedSection.isInitialized || !::concatAdapter.isInitialized) return 1
                 if (position == 0) return lm.spanCount
-                // Guard against completedSection not yet initialized
-                if (!::completedSection.isInitialized) return 1
-                // Last item(s) belong to the completed section — also full width
                 val sc = completedSection.itemCount
                 val total = concatAdapter.itemCount
                 return if (sc > 0 && position >= total - sc) lm.spanCount else 1
