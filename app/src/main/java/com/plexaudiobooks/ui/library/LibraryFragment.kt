@@ -1,5 +1,5 @@
 package com.plexaudiobooks.ui.library
-//Anchor date: 5/29/2026 Time: 8:59 ET
+//Anchor date: 6/4/2026 Time: 9:17AM ET
 import android.os.Bundle
 import android.view.*
 import androidx.appcompat.app.AlertDialog
@@ -85,6 +85,7 @@ class LibraryFragment : Fragment() {
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) }
         )
         bookAdapter.isGridMode = isGridMode
+        continueHeader.isGridMode = isGridMode
 
         completedSection = CompletedSectionAdapter(
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) },
@@ -175,6 +176,7 @@ class LibraryFragment : Fragment() {
         isGridMode = !isGridMode
         viewModel.session.libraryViewMode = if (isGridMode) "grid" else "list"
         bookAdapter.isGridMode = isGridMode
+        continueHeader.isGridMode = isGridMode
         completedSection.isGridMode = isGridMode
         val lm = makeLayoutManager()
         applySpanSizeLookup(lm)

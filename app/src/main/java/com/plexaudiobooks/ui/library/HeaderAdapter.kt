@@ -1,8 +1,9 @@
 package com.plexaudiobooks.ui.library
-
+// Anchor comment Date:5/29/2026 Time: 4:15 PM
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.bumptech.glide.Glide
@@ -14,9 +15,9 @@ import com.plexaudiobooks.databinding.ItemBookListBinding
 
 
 /**
- * A single-row adapter that holds the Continue Listening horizontal carousel.
- * Used as the first adapter in a ConcatAdapter so the carousel sits above
- * the main paged grid/list without requiring NestedScrollView.
+ * A single-row adapter that holds the Continue Listening section.
+ * In grid mode: horizontal carousel.
+ * In list mode: vertical list using item_book_list.xml.
  */
 class ContinueListeningHeaderAdapter(
     private val thumbUrlBuilder: (String?) -> String?,
@@ -25,6 +26,13 @@ class ContinueListeningHeaderAdapter(
 
     private var items: List<ContinueListeningItem> = emptyList()
     private var innerAdapter: ContinueListeningAdapter? = null
+    private var boundHolder: VH? = null
+
+    var isGridMode: Boolean = true
+        set(value) {
+            field = value
+            notifyItemChanged(0)
+        }
 
     fun submitList(list: List<ContinueListeningItem>) {
         items = list
@@ -40,17 +48,11 @@ class ContinueListeningHeaderAdapter(
         val binding = HeaderContinueListeningBinding.inflate(
             LayoutInflater.from(parent.context), parent, false
         )
-        val adapter = ContinueListeningAdapter(thumbUrlBuilder, onBookClick)
-        innerAdapter = adapter
-        binding.rvContinueListening.apply {
-            this.adapter = adapter
-            layoutManager = LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
-        }
-        adapter.submitList(items)
         return VH(binding)
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
+        boundHolder = holder
         if (items.isEmpty()) {
             holder.itemView.visibility = View.GONE
             holder.itemView.layoutParams = RecyclerView.LayoutParams(0, 0)
@@ -60,11 +62,58 @@ class ContinueListeningHeaderAdapter(
                 RecyclerView.LayoutParams.MATCH_PARENT,
                 RecyclerView.LayoutParams.WRAP_CONTENT
             )
+            holder.bind(items, isGridMode)
         }
     }
 
-    class VH(binding: HeaderContinueListeningBinding) :
-        RecyclerView.ViewHolder(binding.root)
+    inner class VH(private val binding: HeaderContinueListeningBinding) :
+        RecyclerView.ViewHolder(binding.root) {
+
+        fun bind(list: List<ContinueListeningItem>, gridMode: Boolean) {
+            if (gridMode) {
+                // Horizontal carousel
+                binding.rvContinueListening.visibility = View.VISIBLE
+                binding.listContainer.visibility = View.GONE
+                if (innerAdapter == null) {
+                    val adapter = ContinueListeningAdapter(thumbUrlBuilder, onBookClick)
+                    innerAdapter = adapter
+                    binding.rvContinueListening.apply {
+                        this.adapter = adapter
+                        layoutManager = LinearLayoutManager(
+                            context, LinearLayoutManager.HORIZONTAL, false
+                        )
+                    }
+                }
+                innerAdapter?.submitList(list)
+            } else {
+                // Vertical list
+                binding.rvContinueListening.visibility = View.GONE
+                binding.listContainer.visibility = View.VISIBLE
+                binding.listContainer.removeAllViews()
+                list.forEach { item ->
+                    val row = ItemBookListBinding.inflate(
+                        LayoutInflater.from(binding.listContainer.context),
+                        binding.listContainer,
+                        false
+                    )
+                    row.tvBookTitle.text = item.title
+                    row.tvBookAuthor.text = item.author ?: ""
+                    val progress = if (item.durationMs > 0)
+                        ((item.positionMs.toFloat() / item.durationMs) * 100).toInt()
+                    else 0
+                    row.progressBook.progress = progress
+                    row.tvOfflineBadge.visibility = View.GONE
+                    Glide.with(binding.listContainer.context)
+                        .load(thumbUrlBuilder(item.thumbPath))
+                        .placeholder(R.drawable.ic_book_placeholder)
+                        .centerCrop()
+                        .into(row.ivCover)
+                    row.root.setOnClickListener { onBookClick(item) }
+                    binding.listContainer.addView(row.root)
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -120,15 +169,12 @@ class CompletedSectionAdapter(
             while (container.childCount > 1) container.removeViewAt(1)
 
             if (gridMode) {
-                // Grid mode: use a RecyclerView with GridLayoutManager so we get
-                // the same item_book.xml layout that BookAdapter uses
                 val rv = RecyclerView(container.context).apply {
                     layoutParams = ViewGroup.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
                     )
-                    layoutManager = androidx.recyclerview.widget.GridLayoutManager(context, 2)
-                    // Disable nested scrolling so the outer RecyclerView scrolls, not this one
+                    layoutManager = GridLayoutManager(context, 2)
                     isNestedScrollingEnabled = false
                 }
                 val adapter = CompletedGridAdapter(thumbUrlBuilder, onBookClick, onMarkUnread)
@@ -136,7 +182,6 @@ class CompletedSectionAdapter(
                 adapter.submitList(list)
                 container.addView(rv)
             } else {
-                // List mode: inflate item_book_list.xml for each book directly into the container
                 list.forEach { entity ->
                     val binding = ItemBookListBinding.inflate(
                         LayoutInflater.from(container.context), container, false
@@ -159,6 +204,7 @@ class CompletedSectionAdapter(
         }
     }
 }
+
 // Grid adapter for completed books — reuses item_book.xml same as BookAdapter
 private class CompletedGridAdapter(
     private val thumbUrlBuilder: (String?) -> String?,
