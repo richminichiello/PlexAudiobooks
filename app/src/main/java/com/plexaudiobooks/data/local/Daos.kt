@@ -57,7 +57,7 @@ interface CachedLibraryDao {
     suspend fun getCount(): Int
 
     @Query("SELECT * FROM cached_library WHERE title LIKE :query OR author LIKE :query ORDER BY title ASC")
-    fun searchLibrary(query: String): kotlinx.coroutines.flow.Flow<List<CachedLibraryEntity>>
+    fun searchLibrary(query: String): Flow<List<CachedLibraryEntity>>
 
     @Query("UPDATE cached_library SET completed = :completed WHERE ratingKey = :ratingKey")
     suspend fun setCompleted(ratingKey: String, completed: Boolean)

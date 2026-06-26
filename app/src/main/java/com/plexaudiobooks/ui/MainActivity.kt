@@ -106,7 +106,7 @@ class MainActivity : AppCompatActivity() {
 
     fun sendChaptersToService(chapters: List<com.plexaudiobooks.data.model.Chapter>) {
         // Always update the companion so service picks up on next play
-        com.plexaudiobooks.service.AudiobookPlaybackService.pendingChapters = chapters
+        AudiobookPlaybackService.pendingChapters = chapters
     }
 
     override fun onDestroy() {

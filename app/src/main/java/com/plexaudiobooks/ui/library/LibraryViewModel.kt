@@ -98,8 +98,8 @@ class LibraryViewModel @Inject constructor(
     val completedBooks: Flow<List<CachedLibraryEntity>> =
         libraryPagingDao.getCompleted()
 
-    val lastPlayed = progressDao.getLastPlayed()
-    val downloads = downloadDao.getAllDownloads()
+    //val lastPlayed = progressDao.getLastPlayed()
+    //val downloads = downloadDao.getAllDownloads()
 
     init { refresh() }
 

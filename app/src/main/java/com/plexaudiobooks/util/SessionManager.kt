@@ -57,7 +57,7 @@ class SessionManager @Inject constructor(
         // EncryptedSharedPreferences can fail if the keystore is unavailable
         // (e.g. on first boot before the device is fully unlocked).
         // Fall back to clearing and recreating — user will need to log in again.
-        android.util.Log.e("SessionManager", "EncryptedSharedPreferences init failed, clearing: ${e.message}")
+        Log.e("SessionManager", "EncryptedSharedPreferences init failed, clearing: ${e.message}")
         context.deleteSharedPreferences(PREF_FILE)
         EncryptedSharedPreferences.create(
             context, PREF_FILE, masterKey,

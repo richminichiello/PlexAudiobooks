@@ -134,7 +134,7 @@ class DetailFragment : Fragment() {
                         binding.btnDownload.isVisible = true
                         binding.btnDownload.setText(R.string.download)
                         val errorMsg = info.outputData.getString(
-                            com.plexaudiobooks.service.BookDownloadWorker.KEY_ERROR
+                            BookDownloadWorker.KEY_ERROR
                         ) ?: getString(R.string.download_failed)
                         Toast.makeText(requireContext(), errorMsg, Toast.LENGTH_LONG).show()
                     }

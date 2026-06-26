@@ -88,7 +88,7 @@ class SettingsFragment : Fragment() {
             val options = listOf("internal", "external")
             val labels = arrayOf("Internal storage (recommended)", "External storage (SD card / Files app)")
             val currentIndex = options.indexOf(session.downloadLocation).coerceAtLeast(0)
-            androidx.appcompat.app.AlertDialog.Builder(requireContext())
+            AlertDialog.Builder(requireContext())
                 .setTitle("Download location")
                 .setSingleChoiceItems(labels, currentIndex) { dialog, which ->
                     session.downloadLocation = options[which]
@@ -109,7 +109,7 @@ class SettingsFragment : Fragment() {
                 binding.tvDownloadHours.text = "${value}h"
                 // Warn if > 2h selected — this will auto-download when listening starts
                 if (value > 2) {
-                    androidx.appcompat.app.AlertDialog.Builder(requireContext())
+                    AlertDialog.Builder(requireContext())
                         .setTitle("Large Read-Ahead Cache")
                         .setMessage("${value}h of audio will be automatically downloaded each time you start listening to a book. This may use significant data on cellular networks. Starting playback on Wi-Fi is recommended.")
                         .setPositiveButton("Got it", null)
@@ -157,7 +157,7 @@ class SettingsFragment : Fragment() {
             val downloadsDir = File(requireContext().filesDir, "downloads")
             downloadsDir.walkTopDown().filter { it.isFile }.forEach { it.delete() }
             // Clear DB records
-            val downloads = repository.observeDownloads()
+            repository.observeDownloads()
             // We can't iterate a Flow directly — use the DAO via a one-shot approach
             // Clear by removing all entries tracked in Room
             requireContext().let { ctx ->

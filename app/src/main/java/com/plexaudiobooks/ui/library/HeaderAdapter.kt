@@ -26,7 +26,7 @@ class ContinueListeningHeaderAdapter(
 
     private var items: List<ContinueListeningItem> = emptyList()
     private var innerAdapter: ContinueListeningAdapter? = null
-    private var boundHolder: VH? = null
+    //private var boundHolder: VH? = null
 
     var isGridMode: Boolean = true
         set(value) {
@@ -52,7 +52,7 @@ class ContinueListeningHeaderAdapter(
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
-        boundHolder = holder
+        //boundHolder = holder
         if (items.isEmpty()) {
             holder.itemView.visibility = View.GONE
             holder.itemView.layoutParams = RecyclerView.LayoutParams(0, 0)

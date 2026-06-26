@@ -1,13 +1,15 @@
 package com.plexaudiobooks.ui.player
 //This is my test comment in file PlayerViewModel.kt
-import androidx.lifecycle.*
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import com.plexaudiobooks.data.PlexRepository
 import com.plexaudiobooks.data.Result
 import com.plexaudiobooks.data.model.AudioBook
 import com.plexaudiobooks.data.model.Chapter
 import com.plexaudiobooks.util.SessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
@@ -35,22 +37,85 @@ class PlayerViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState
 
-    private var positionPollJob: Job? = null
+    //private var positionPollJob: Job? = null
 
     // Called when user navigates to the player screen
     fun loadBook(ratingKey: String) {
         viewModelScope.launch {
             _uiState.value = PlayerUiState(isLoading = true)
-
-            val download = repository.getDownload(ratingKey)
-            val savedPosition = repository.getProgress(ratingKey) ?: 0L
             val speed = session.playbackSpeed
+
+            // All three are Room reads — instant, no network
+            val cached = repository.getCachedBook(ratingKey)
+            val download = repository.getDownload(ratingKey)
+            val rawPosition = repository.getProgress(ratingKey) ?: 0L
+            val bookDuration = download?.durationMs ?: cached?.durationMs ?: 0L
+            val thresholdMs = session.autoCompleteMinutes * 60 * 1000L
+
+            // If the book is marked complete and the saved position is within the
+            // auto-complete threshold of the end, reset to 0 so it plays from the
+            // beginning rather than crashing by seeking to a near-end position.
+            val isCompleted = cached?.completed == true
+            val savedPosition = if (isCompleted &&
+                bookDuration > 0 &&
+                rawPosition >= bookDuration - thresholdMs) 0L else rawPosition
+
+            // Fast path: emit whatever we have locally before any network call.
+            // Cover art is already in Glide's disk cache from the library screen.
+            if (download != null) {
+                // Full offline copy — render immediately, isLoading=false
+                _uiState.value = PlayerUiState(
+                    book = AudioBook(
+                        ratingKey = ratingKey,
+                        title = download.title,
+                        author = download.author,
+                        summary = null,
+                        thumbPath = download.thumbPath,
+                        duration = download.durationMs,
+                        viewOffset = savedPosition,
+                        addedAt = 0L,
+                        mediaKey = download.mediaPartKey,
+                        isDownloaded = true,
+                        downloadedPath = download.localFilePath
+                    ),
+                    chapters = emptyList(),
+                    positionMs = savedPosition,
+                    durationMs = download.durationMs,
+                    downloadedUpToMs = download.downloadedUpToMs,
+                    playbackSpeed = speed,
+                    isOffline = true,
+                    isLoading = false
+                )
+            } else if (cached != null) {
+                // No download but library cache has cover art, title, position.
+                // isLoading stays true so maybeStartPlayback() stays blocked.
+                _uiState.value = PlayerUiState(
+                    book = AudioBook(
+                        ratingKey = cached.ratingKey,
+                        title = cached.title,
+                        author = cached.author,
+                        summary = cached.summary,
+                        thumbPath = cached.thumbPath,
+                        duration = cached.durationMs,
+                        viewOffset = savedPosition,
+                        addedAt = cached.addedAt,
+                        mediaKey = cached.mediaPartKey
+                    ),
+                    positionMs = savedPosition,
+                    durationMs = cached.durationMs,
+                    playbackSpeed = speed,
+                    isLoading = true
+                )
+            }
+
+           // val savedPosition = repository.getProgress(ratingKey) ?: 0L
+            //val speed = session.playbackSpeed
 
             // FIX 4: If a local download exists, emit playable state immediately —
             // don't wait for network. ExoPlayer starts from file:// instantly.
             if (download != null) {
                 _uiState.value = PlayerUiState(
-                    book = com.plexaudiobooks.data.model.AudioBook(
+                    book = AudioBook(
                         ratingKey = ratingKey,
                         title = download.title,
                         author = download.author,
@@ -75,7 +140,7 @@ class PlayerViewModel @Inject constructor(
                 viewModelScope.launch {
                     repository.resolveAndRefreshServerUrl()
                     val result = repository.fetchBookDetail(ratingKey)
-                    if (result is com.plexaudiobooks.data.Result.Success) {
+                    if (result is Result.Success) {
                         val (book, chapters) = result.data
                         // Keep downloadedUpToMs from the download entity
                         val cachedUpTo = _uiState.value.downloadedUpToMs
@@ -98,7 +163,7 @@ class PlayerViewModel @Inject constructor(
             repository.resolveAndRefreshServerUrl()
 
             when (val result = repository.fetchBookDetail(ratingKey)) {
-                is com.plexaudiobooks.data.Result.Success -> {
+                is Result.Success -> {
                     val (book, chapters) = result.data
                     _uiState.value = PlayerUiState(
                         book = book.copy(viewOffset = savedPosition),
@@ -110,7 +175,7 @@ class PlayerViewModel @Inject constructor(
                         isLoading = false
                     )
                 }
-                is com.plexaudiobooks.data.Result.Error -> {
+                is Result.Error -> {
                     _uiState.value = PlayerUiState(
                         isLoading = false,
                         error = result.message
@@ -147,23 +212,23 @@ class PlayerViewModel @Inject constructor(
         return session.buildStreamUrl(partKey)
     }
 
-    fun onPlaybackStarted() {
-        _uiState.value = _uiState.value.copy(isPlaying = true)
-    }
+    //fun onPlaybackStarted() {
+    //    _uiState.value = _uiState.value.copy(isPlaying = true)
+    //}
 
-    fun onPlaybackPaused() {
-        _uiState.value = _uiState.value.copy(isPlaying = false)
-    }
+    //fun onPlaybackPaused() {
+    //    _uiState.value = _uiState.value.copy(isPlaying = false)
+    //}
 
-    fun updatePosition(positionMs: Long, durationMs: Long) {
-        val chapters = _uiState.value.chapters
-        val chapterIndex = chapters.indexOfLast { positionMs >= it.startMs }
-        _uiState.value = _uiState.value.copy(
-            positionMs = positionMs,
-            durationMs = durationMs,
-            currentChapterIndex = chapterIndex
-        )
-    }
+    //fun updatePosition(positionMs: Long, durationMs: Long) {
+    //    val chapters = _uiState.value.chapters
+    //    val chapterIndex = chapters.indexOfLast { positionMs >= it.startMs }
+    //    _uiState.value = _uiState.value.copy(
+    //       positionMs = positionMs,
+    //        durationMs = durationMs,
+    //        currentChapterIndex = chapterIndex
+    //    )
+    //}
 
     fun setSpeed(speed: Float) {
         session.playbackSpeed = speed
@@ -176,27 +241,26 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    fun getCurrentChapter(): Chapter? {
-        val state = _uiState.value
-        return state.chapters.getOrNull(state.currentChapterIndex)
-    }
+    //fun getCurrentChapter(): Chapter? {
+    //    val state = _uiState.value
+    //    return state.chapters.getOrNull(state.currentChapterIndex)
+    //}
 
-    fun getNextChapterStart(): Long? {
-        val state = _uiState.value
-        return state.chapters.getOrNull(state.currentChapterIndex + 1)?.startMs
-    }
+    //fun getNextChapterStart(): Long? {
+    //    val state = _uiState.value
+    //    return state.chapters.getOrNull(state.currentChapterIndex + 1)?.startMs
+    //}
 
-    fun getPrevChapterStart(): Long? {
-        val state = _uiState.value
-        val idx = state.currentChapterIndex
-        return if (idx > 0) state.chapters[idx - 1].startMs
-        else state.chapters.getOrNull(0)?.startMs
-    }
+    //fun getPrevChapterStart(): Long? {
+    //    val state = _uiState.value
+    //   val idx = state.currentChapterIndex
+    //    return if (idx > 0) state.chapters[idx - 1].startMs
+    //    else state.chapters.getOrNull(0)?.startMs
+    //}
 
     fun buildThumbUrl(thumbPath: String?): String? = session.buildThumbUrl(thumbPath)
 
     override fun onCleared() {
         super.onCleared()
-        positionPollJob?.cancel()
     }
 }

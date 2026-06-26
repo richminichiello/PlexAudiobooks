@@ -8,9 +8,9 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import android.os.Build
+//import android.net.ConnectivityManager
+//import android.net.NetworkCapabilities
+//import android.os.Build
 import android.os.Bundle
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -47,6 +47,7 @@ import javax.inject.Inject
  * show chapter-level progress bars in Android media notifications and car displays.
  */
 @AndroidEntryPoint
+@androidx.media3.common.util.UnstableApi
 class AudiobookPlaybackService : MediaBrowserServiceCompat() {
 
     @Inject lateinit var repository: PlexRepository
@@ -166,7 +167,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                     exoPlayer.play()
                 }
             } else if (requestAudioFocus()) {
-                playBook(ratingKey, key, streamUrl, title, author, startPos, speed, durationMs)
+                playBook(ratingKey, key, streamUrl, title, author, startPos, speed)
             }
 
             val keys = partKeys.split(",").filter { it.isNotBlank() }
@@ -287,7 +288,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         }
 
         override fun onSetPlaybackSpeed(speed: Float) {
-            exoPlayer.setPlaybackParameters(PlaybackParameters(speed))
+            exoPlayer.playbackParameters = PlaybackParameters(speed)
             session.playbackSpeed = speed
             updatePlaybackState()
         }
@@ -298,7 +299,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     private fun playBook(
         ratingKey: String, key: String, streamUrl: String,
         title: String, author: String?,
-        startPositionMs: Long, playbackSpeed: Float, durationMs: Long
+        startPositionMs: Long, playbackSpeed: Float
     ) {
         currentRatingKey = ratingKey
         currentKey = key
@@ -309,7 +310,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
         exoPlayer.prepare()
         exoPlayer.seekTo(startPositionMs)
-        exoPlayer.setPlaybackParameters(PlaybackParameters(playbackSpeed))
+        exoPlayer.playbackParameters = PlaybackParameters(playbackSpeed)
         exoPlayer.play()
 
         // Update currentChapterIndex based on saved position
@@ -467,7 +468,15 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             updatePlaybackState()
             if (isPlaying) {
-                startForegroundNotification()
+                try {
+                    startForegroundNotification()
+                } catch (e: Exception) {
+                    // Android 12+ throws ForegroundServiceStartNotAllowedException
+                    // when audio focus returns while the app is in the background.
+                    // The service is already running — just update the notification
+                    // state without promoting to foreground from this context.
+                    Log.w(TAG, "startForeground blocked (app in background): ${e.message}")
+                }
             } else {
                 stopForeground(STOP_FOREGROUND_DETACH)
                 if (!pausedForFocusLoss) {
@@ -480,14 +489,42 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
             updatePlaybackState()
             if (playbackState == Player.STATE_ENDED) {
                 serviceScope.launch {
+                    val ratingKey = currentRatingKey ?: return@launch
+                    val pos = exoPlayer.currentPosition
+                    val download = repository.getDownload(ratingKey)
+
+                    // If we have a partial local file and the position hasn't
+                    // actually reached the full book duration, ExoPlayer hit the
+                    // end of the truncated file — not the real end of the book.
+                    // Switch to streaming from the server to continue playback.
+                    if (download != null &&
+                        download.downloadedUpToMs < download.durationMs &&
+                        pos < download.durationMs - 10_000L) {
+
+                        val partKey = download.mediaPartKey
+                        val streamUrl = session.buildStreamUrl(partKey)
+                        if (streamUrl != null) {
+                            Log.i(TAG, "Local file ended before book end " +
+                                    "(pos=${pos}ms, cachedTo=${download.downloadedUpToMs}ms, " +
+                                    "dur=${download.durationMs}ms) — switching to stream")
+                            exoPlayer.setMediaItem(
+                                androidx.media3.common.MediaItem.fromUri(streamUrl)
+                            )
+                            exoPlayer.prepare()
+                            exoPlayer.seekTo(pos)
+                            exoPlayer.play()
+                            return@launch  // not a real end — don't mark complete or stop
+                        }
+                    }
+
+                    // Real end of book — save, mark complete, stop service
                     saveProgress("stopped")
-                    // Book finished naturally — always mark complete regardless of threshold
-                    currentRatingKey?.let { repository.setCompleted(it, true) }
+                    repository.setCompleted(ratingKey, true)
+                    stateUpdateJob?.cancel()
+                    progressJob?.cancel()
+                    abandonAudioFocus()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
                 }
-                stateUpdateJob?.cancel()
-                progressJob?.cancel()
-                abandonAudioFocus()
-                stopForeground(STOP_FOREGROUND_REMOVE)
             }
         }
     }
@@ -514,52 +551,38 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun requestAudioFocus(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                .setAudioAttributes(AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build())
-                .setOnAudioFocusChangeListener(audioFocusListener)
-                .build()
-            audioFocusRequest = req
-            audioManager.requestAudioFocus(req).let {
-                it == AudioManager.AUDIOFOCUS_REQUEST_GRANTED ||
-                it == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.requestAudioFocus(
-                audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN
-            ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build())
+            .setOnAudioFocusChangeListener(audioFocusListener)
+            .build()
+        audioFocusRequest = req
+        return audioManager.requestAudioFocus(req).let {
+            it == AudioManager.AUDIOFOCUS_REQUEST_GRANTED ||
+                    it == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
         }
     }
 
     private fun abandonAudioFocus() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
-        } else {
-            @Suppress("DEPRECATION")
-            audioManager.abandonAudioFocus(audioFocusListener)
-        }
+        audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         audioFocusRequest = null
     }
 
     // ── Notification ──────────────────────────────────────────────────────────
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                NOTIFICATION_CHANNEL_ID,
-                "Audiobook Playback",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Controls for audiobook playback"
-                setShowBadge(false)
-            }
-            getSystemService(NotificationManager::class.java)
-                ?.createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            NOTIFICATION_CHANNEL_ID,
+            "Audiobook Playback",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "Controls for audiobook playback"
+            setShowBadge(false)
         }
+        getSystemService(NotificationManager::class.java)
+            ?.createNotificationChannel(channel)
     }
 
     private fun startForegroundNotification() {
@@ -641,7 +664,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
 
         // Auto-complete: mark book finished if within the configured threshold
         val thresholdMs = session.autoCompleteMinutes * 60 * 1000L
-        if (dur > 0 && (dur - pos) <= thresholdMs) {
+        if (dur > 0 && (dur - pos) <= thresholdMs && pos < dur) {
             repository.setCompleted(ratingKey, true)
         }
     }
@@ -654,9 +677,24 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     ) {
         serviceScope.launch(Dispatchers.IO) {
             try {
-                if (repository.getDownload(ratingKey) != null) return@launch
+                val existing = repository.getDownload(ratingKey)
+                val currentPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                val targetCachedUpToMs = (currentPositionMs + session.downloadHours * 3600 * 1000L)
+                    .coerceAtMost(durationMs)
+
+                if (existing != null && existing.downloadedUpToMs >= targetCachedUpToMs) {
+                    // Cache already covers the desired read-ahead window from here — nothing to do
+                    return@launch
+                }
+
+                Log.i(TAG, "Read-ahead: extending cache (have ${existing?.downloadedUpToMs ?: 0}ms, " +
+                        "need ${targetCachedUpToMs}ms from position ${currentPositionMs}ms)")
+
                 WorkManager.getInstance(applicationContext).enqueue(
-                    BookDownloadWorker.buildRequest(ratingKey, title, author, thumbPath, partKeys, durationMs)
+                    BookDownloadWorker.buildRequest(
+                        ratingKey, title, author, thumbPath, partKeys, durationMs,
+                        targetCachedUpToMs = targetCachedUpToMs
+                    )
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Read-ahead failed: ${e.message}")

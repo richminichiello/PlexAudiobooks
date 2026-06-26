@@ -5,6 +5,8 @@ import android.os.Bundle
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.session.MediaControllerCompat
 import android.support.v4.media.session.PlaybackStateCompat
+import android.support.v4.media.MediaMetadataCompat
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -27,6 +29,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
+@androidx.media3.common.util.UnstableApi
 class PlayerFragment : Fragment() {
 
     private var _binding: FragmentPlayerBinding? = null
@@ -94,11 +97,13 @@ class PlayerFragment : Fragment() {
                     MediaControllerCompat.setMediaController(requireActivity(), ctrl)
                     // Try to start playback now — book may already be loaded
                     maybeStartPlayback()
-                    startPositionPolling()
+                    //startPositionPolling() // Polling starts only after chapters arrive (see updateUi).
+                    // Starting here with no chapters causes a book-level seekbar
+                    // flash before chapter-relative progress is ready.
                 }
 
                 override fun onConnectionFailed() {
-                    android.util.Log.e("PlayerFragment", "MediaBrowser connection failed")
+                    Log.e("PlayerFragment", "MediaBrowser connection failed")
                 }
 
                 override fun onConnectionSuspended() {
@@ -166,11 +171,8 @@ class PlayerFragment : Fragment() {
                 state?.state != PlaybackStateCompat.STATE_BUFFERING
         }
 
-        override fun onMetadataChanged(metadata: android.support.v4.media.MediaMetadataCompat?) {
-            // Chapter title is reflected in the metadata — update the label
-            val chapterTitle = metadata?.getString(
-                android.support.v4.media.MediaMetadataCompat.METADATA_KEY_TITLE
-            )
+        override fun onMetadataChanged(metadata: MediaMetadataCompat?) {
+            val chapterTitle = metadata?.getString(MediaMetadataCompat.METADATA_KEY_TITLE)
             _binding?.tvCurrentChapter?.text = chapterTitle ?: ""
         }
     }
@@ -359,10 +361,16 @@ class PlayerFragment : Fragment() {
     // ── UI update ─────────────────────────────────────────────────────────────
 
     private fun updateUi(state: PlayerUiState) {
-        if (state.isLoading) {
+        if (state.isLoading && state.book == null) {
             binding.loadingGroup.visibility = View.VISIBLE
             binding.contentGroup.visibility = View.GONE
             return
+        }
+        if (state.isLoading && state.book != null) {
+            // We have cached book data — show cover art immediately while
+            // the network call for chapters is still in flight.
+            binding.loadingGroup.visibility = View.GONE
+            binding.contentGroup.visibility = View.VISIBLE
         }
         binding.loadingGroup.visibility = View.GONE
         binding.contentGroup.visibility = View.VISIBLE
@@ -375,6 +383,9 @@ class PlayerFragment : Fragment() {
             chapterAdapter.submitList(chapters)
             // Push updated chapters to the service if it's running
             AudiobookPlaybackService.pendingChapters = chapters
+            // Now that chapters are available, start the position polling loop.
+            // Waiting until here prevents the book-level seekbar flash.
+            startPositionPolling()
         }
 
         maybeStartPlayback()
@@ -390,6 +401,7 @@ class PlayerFragment : Fragment() {
         if (thumbUrl != null) {
             Glide.with(this).load(thumbUrl)
                 .placeholder(R.drawable.ic_book_placeholder)
+                .transition(com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions.withCrossFade(300))
                 .into(binding.ivCover)
         }
 

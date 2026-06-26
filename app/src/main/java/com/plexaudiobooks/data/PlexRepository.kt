@@ -96,25 +96,25 @@ class PlexRepository @Inject constructor(
             // Chronicle confirmed: must use the ACCOUNT-level token (from OAuth pin check),
             // not a switched user token (serverToken). authToken is always account-level.
             val token = session.authToken ?: return@withContext Result.Error("Not logged in")
-            android.util.Log.d("PlexRepo", "getHomeUsers: calling with authToken (account-level)")
+            Log.d("PlexRepo", "getHomeUsers: calling with authToken (account-level)")
             val resp = plexTvApi.getHomeUsers(token)
-            android.util.Log.d("PlexRepo", "getHomeUsers: HTTP ${resp.code()}")
+            Log.d("PlexRepo", "getHomeUsers: HTTP ${resp.code()}")
             if (resp.isSuccessful) {
                 val body = resp.body()
                 val users = body?.users ?: emptyList()
-                android.util.Log.d("PlexRepo", "getHomeUsers: body=${body != null}, size=${body?.size}, users=${users.size} — ${users.map { it.title }}")
+                Log.d("PlexRepo", "getHomeUsers: body=${body != null}, size=${body?.size}, users=${users.size} — ${users.map { it.title }}")
                 if (users.isEmpty() && body != null) {
                     // Body deserialized but users list is empty — log raw to diagnose key mismatch
-                    android.util.Log.w("PlexRepo", "getHomeUsers: got body but 0 users — check JSON key casing")
+                    Log.w("PlexRepo", "getHomeUsers: got body but 0 users — check JSON key casing")
                 }
                 Result.Success(users)
             } else {
                 val errBody = resp.errorBody()?.string()
-                android.util.Log.w("PlexRepo", "getHomeUsers failed: HTTP ${resp.code()} body=$errBody")
+                Log.w("PlexRepo", "getHomeUsers failed: HTTP ${resp.code()} body=$errBody")
                 Result.Success(emptyList())
             }
         } catch (e: Exception) {
-            android.util.Log.e("PlexRepo", "getHomeUsers exception: ${e.javaClass.simpleName}: ${e.message}", e)
+            Log.e("PlexRepo", "getHomeUsers exception: ${e.javaClass.simpleName}: ${e.message}", e)
             Result.Success(emptyList())
         }
     }
@@ -125,12 +125,12 @@ class PlexRepository @Inject constructor(
                 val token = session.authToken ?: return@withContext Result.Error("Not logged in")
                 // Chronicle confirmed: use uuid (String), not numeric id
                 val resp = plexTvApi.switchHomeUser(userUuid, token, pin)
-                android.util.Log.d("PlexRepo", "switchHomeUser: HTTP ${resp.code()}")
+                Log.d("PlexRepo", "switchHomeUser: HTTP ${resp.code()}")
                 if (resp.isSuccessful && resp.body() != null) {
                     // Response is a flat PlexUser at the root — no "user" wrapper
                     val user = resp.body()!!
                     val newToken = user.authToken
-                    android.util.Log.d("PlexRepo", "switchHomeUser: got token=${!newToken.isNullOrEmpty()}, username=${user.username}")
+                    Log.d("PlexRepo", "switchHomeUser: got token=${!newToken.isNullOrEmpty()}, username=${user.username}")
                     if (!newToken.isNullOrEmpty()) {
                         session.authToken = newToken
                         Result.Success(newToken)
@@ -141,7 +141,7 @@ class PlexRepository @Inject constructor(
                     Result.Error("Incorrect PIN — please try again")
                 } else {
                     val errBody = resp.errorBody()?.string()
-                    android.util.Log.w("PlexRepo", "switchHomeUser failed: ${resp.code()} $errBody")
+                    Log.w("PlexRepo", "switchHomeUser failed: ${resp.code()} $errBody")
                     Result.Error("Failed to switch user: HTTP ${resp.code()}")
                 }
             } catch (e: Exception) {
@@ -311,8 +311,9 @@ class PlexRepository @Inject constructor(
             }
         }
 
-    fun observeLibrary(): Flow<List<CachedLibraryEntity>> = libraryDao.getAllCached()
-
+    //fun observeLibrary(): Flow<List<CachedLibraryEntity>> = libraryDao.getAllCached()
+    suspend fun getCachedBook(ratingKey: String): CachedLibraryEntity? =
+        libraryDao.getBook(ratingKey)
     suspend fun setCompleted(ratingKey: String, completed: Boolean) {
         libraryDao.setCompleted(ratingKey, completed)
     }
@@ -443,7 +444,7 @@ class PlexRepository @Inject constructor(
     suspend fun getProgress(ratingKey: String): Long? =
         progressDao.getProgress(ratingKey)?.positionMs
 
-    fun observeLastPlayed(): Flow<PlaybackProgressEntity?> = progressDao.getLastPlayed()
+    //fun observeLastPlayed(): Flow<PlaybackProgressEntity?> = progressDao.getLastPlayed()
 
     suspend fun reportProgressToPlex(ratingKey: String, key: String,
                                      positionMs: Long, durationMs: Long, state: String) {
@@ -461,9 +462,9 @@ class PlexRepository @Inject constructor(
                 duration = durationMs,
                 hasMde = 1
             )
-            android.util.Log.d("PlexRepo", "reportTimeline: ratingKey=$ratingKey state=$state pos=${positionMs/1000}s")
+            Log.d("PlexRepo", "reportTimeline: ratingKey=$ratingKey state=$state pos=${positionMs/1000}s")
         } catch (e: Exception) {
-            android.util.Log.w("PlexRepo", "reportTimeline failed: ${e.message}")
+            Log.w("PlexRepo", "reportTimeline failed: ${e.message}")
         }
     }
 
@@ -509,11 +510,11 @@ class PlexRepository @Inject constructor(
         mediaPartKey = media?.firstOrNull()?.parts?.firstOrNull()?.key
     )
 
-    private fun PlexChapter.toChapter() = Chapter(
-        id = id,
-        index = index,
-        title = tag,
-        startMs = startTimeOffset,
-        endMs = endTimeOffset
-    )
+    //private fun PlexChapter.toChapter() = Chapter(
+    //   id = id,
+    //    index = index,
+    //    title = tag,
+    //    startMs = startTimeOffset,
+     //   endMs = endTimeOffset
+    //)
 }
