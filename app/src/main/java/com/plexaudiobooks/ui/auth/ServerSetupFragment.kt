@@ -17,9 +17,11 @@ import com.plexaudiobooks.data.model.PlexDirectory
 import com.plexaudiobooks.data.model.PlexHomeUser
 import com.plexaudiobooks.data.model.PlexResource
 import com.plexaudiobooks.databinding.FragmentServerSetupBinding
+import com.plexaudiobooks.util.SessionManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class ServerSetupFragment : Fragment() {
@@ -27,6 +29,7 @@ class ServerSetupFragment : Fragment() {
     private var _binding: FragmentServerSetupBinding? = null
     private val binding get() = _binding!!
     private val viewModel: ServerSetupViewModel by viewModels()
+    @Inject lateinit var session: SessionManager
 
     // Reuse the server adapter for home users and libraries too (same list UI)
     private lateinit var listAdapter: ServerListAdapter
@@ -69,6 +72,21 @@ class ServerSetupFragment : Fragment() {
         }
 
         viewModel.start()
+
+        // Back-out handling: if a token was acquired (half-authed) but no server was ever
+        // selected, the user bailing out here would otherwise leave an orphaned token that
+        // forces re-auth on next launch. Clear auth state so the next launch starts clean.
+        requireActivity().onBackPressedDispatcher.addCallback(viewLifecycleOwner,
+            object : androidx.activity.OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (session.serverUrl == null) {
+                        session.logout()
+                    }
+                    isEnabled = false
+                    requireActivity().onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            })
     }
 
     private fun renderStep(step: SetupStep) {
@@ -150,7 +168,8 @@ class ServerSetupFragment : Fragment() {
             .setNegativeButton("Cancel") { _, _ ->
                 viewModel.start() // restart from home user pick
             }
-            .setCancelable(false)
+            .setOnCancelListener { viewModel.start() } // back-dismiss also restarts
+            .setCancelable(true)
             .show()
     }
 

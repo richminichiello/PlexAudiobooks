@@ -20,9 +20,11 @@ import com.bumptech.glide.Glide
 import com.plexaudiobooks.R
 import com.plexaudiobooks.databinding.FragmentDetailBinding
 import com.plexaudiobooks.service.BookDownloadWorker
+import com.plexaudiobooks.ui.playback.PlaybackManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class DetailFragment : Fragment() {
@@ -31,6 +33,7 @@ class DetailFragment : Fragment() {
     private val binding get() = _binding!!
     private val viewModel: DetailViewModel by viewModels()
     private val args: DetailFragmentArgs by navArgs()
+    @Inject lateinit var playbackManager: PlaybackManager
 
     private val storagePermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -66,9 +69,9 @@ class DetailFragment : Fragment() {
         }
 
         binding.btnPlay.setOnClickListener {
-            findNavController().navigate(
-                DetailFragmentDirections.actionDetailToPlayer(args.ratingKey)
-            )
+            // Player is now a sheet owned by PlaybackManager/MainActivity, not a nav destination.
+            playbackManager.play(args.ratingKey)
+            (requireActivity() as? com.plexaudiobooks.ui.MainActivity)?.showPlayerSheet()
         }
 
         binding.btnDownload.setOnClickListener {

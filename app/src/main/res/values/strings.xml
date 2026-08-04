@@ -72,4 +72,7 @@
     <string name="completed">Completed</string>
     <string name="mark_as_read">Mark as Read</string>
     <string name="mark_as_unread">Mark as Unread</string>
+    <string name="put_back_on_shelf">Put this book back on the shelf</string>
+    <string name="nothing_playing">Nothing is playing right now</string>
+    <string name="open_now_playing">Open Now Playing</string>
 </resources>

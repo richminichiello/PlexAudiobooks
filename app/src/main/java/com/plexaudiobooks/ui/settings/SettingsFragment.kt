@@ -26,6 +26,7 @@ class SettingsFragment : Fragment() {
 
     @Inject lateinit var session: SessionManager
     @Inject lateinit var repository: PlexRepository
+    @Inject lateinit var playbackManager: com.plexaudiobooks.ui.playback.PlaybackManager
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?,
                               savedInstanceState: Bundle?): View {
@@ -134,6 +135,9 @@ class SettingsFragment : Fragment() {
                 .setTitle(R.string.sign_out)
                 .setMessage("Are you sure you want to sign out?")
                 .setPositiveButton(R.string.sign_out) { _, _ ->
+                    // Stop any active playback before clearing state so audio doesn't keep
+                    // streaming on the auth screen post-sign-out.
+                    playbackManager.stop()
                     session.logout()
                     findNavController().navigate(R.id.action_settings_to_auth)
                 }

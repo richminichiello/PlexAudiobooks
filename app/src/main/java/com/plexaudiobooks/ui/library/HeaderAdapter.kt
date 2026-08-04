@@ -21,7 +21,8 @@ import com.plexaudiobooks.databinding.ItemBookListBinding
  */
 class ContinueListeningHeaderAdapter(
     private val thumbUrlBuilder: (String?) -> String?,
-    private val onBookClick: (ContinueListeningItem) -> Unit
+    private val onBookClick: (ContinueListeningItem) -> Unit,
+    private val onBookLongClick: ((ContinueListeningItem) -> Unit)? = null
 ) : RecyclerView.Adapter<ContinueListeningHeaderAdapter.VH>() {
 
     private var items: List<ContinueListeningItem> = emptyList()
@@ -75,7 +76,7 @@ class ContinueListeningHeaderAdapter(
                 binding.rvContinueListening.visibility = View.VISIBLE
                 binding.listContainer.visibility = View.GONE
                 if (innerAdapter == null) {
-                    val adapter = ContinueListeningAdapter(thumbUrlBuilder, onBookClick)
+                    val adapter = ContinueListeningAdapter(thumbUrlBuilder, onBookClick, onBookLongClick)
                     innerAdapter = adapter
                     binding.rvContinueListening.apply {
                         this.adapter = adapter
@@ -109,6 +110,9 @@ class ContinueListeningHeaderAdapter(
                         .centerCrop()
                         .into(row.ivCover)
                     row.root.setOnClickListener { onBookClick(item) }
+                    onBookLongClick?.let { handler ->
+                        row.root.setOnLongClickListener { handler(item); true }
+                    }
                     binding.listContainer.addView(row.root)
                 }
             }

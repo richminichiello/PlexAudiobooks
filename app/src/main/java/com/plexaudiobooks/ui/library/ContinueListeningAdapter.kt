@@ -12,7 +12,8 @@ import com.plexaudiobooks.databinding.ItemContinueListeningBinding
 
 class ContinueListeningAdapter(
     private val thumbUrlBuilder: (String?) -> String?,
-    private val onBookClick: (ContinueListeningItem) -> Unit
+    private val onBookClick: (ContinueListeningItem) -> Unit,
+    private val onBookLongClick: ((ContinueListeningItem) -> Unit)? = null
 ) : ListAdapter<ContinueListeningItem, ContinueListeningAdapter.ViewHolder>(Diff) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
@@ -40,6 +41,9 @@ class ContinueListeningAdapter(
                 .into(b.ivCover)
 
             b.root.setOnClickListener { onBookClick(item) }
+            onBookLongClick?.let { handler ->
+                b.root.setOnLongClickListener { handler(item); true }
+            }
         }
     }
 

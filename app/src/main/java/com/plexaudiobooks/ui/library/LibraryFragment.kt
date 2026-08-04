@@ -15,11 +15,13 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.plexaudiobooks.R
 import com.plexaudiobooks.databinding.FragmentLibraryBinding
+import com.plexaudiobooks.ui.playback.PlaybackManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 //import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class LibraryFragment : Fragment() {
@@ -27,6 +29,7 @@ class LibraryFragment : Fragment() {
     private var _binding: FragmentLibraryBinding? = null
     private val binding get() = _binding!!
     private val viewModel: LibraryViewModel by viewModels()
+    @Inject lateinit var playbackManager: PlaybackManager
 
     private lateinit var continueHeader: ContinueListeningHeaderAdapter
     private lateinit var bookAdapter: BookAdapter
@@ -60,10 +63,12 @@ class LibraryFragment : Fragment() {
         continueHeader = ContinueListeningHeaderAdapter(
             thumbUrlBuilder = { viewModel.buildThumbUrl(it) },
             onBookClick = { item ->
-                findNavController().navigate(
-                    LibraryFragmentDirections.actionLibraryToPlayer(item.ratingKey)
-                )
-            }
+                // Direct to player (fast resume), per the user's decision. The player is a
+                // sheet now, not a nav destination — start playback and expand the sheet.
+                playbackManager.play(item.ratingKey)
+                (requireActivity() as? com.plexaudiobooks.ui.MainActivity)?.showPlayerSheet()
+            },
+            onBookLongClick = { item -> showContinueListeningBookMenu(item) }
         )
 
         bookAdapter = BookAdapter(
@@ -164,9 +169,9 @@ class LibraryFragment : Fragment() {
                     true
                 }
                 R.id.action_downloads ->
-                { findNavController().navigate(R.id.action_library_to_downloads); true }
+                { findNavController().navigate(R.id.downloadsFragment); true }
                 R.id.action_settings  ->
-                { findNavController().navigate(R.id.action_library_to_settings); true }
+                { findNavController().navigate(R.id.settingsFragment); true }
                 else -> false
             }
         }
@@ -236,6 +241,21 @@ class LibraryFragment : Fragment() {
     }
 
     // ── Search ────────────────────────────────────────────────────────────────
+
+    // ── Continue Listening context menu ──────────────────────────────────────
+
+    private fun showContinueListeningBookMenu(item: com.plexaudiobooks.data.local.ContinueListeningItem) {
+        AlertDialog.Builder(requireContext())
+            .setTitle(item.title)
+            .setItems(arrayOf("Put this book back on the shelf", "Mark as Read")) { _, which ->
+                when (which) {
+                    0 -> viewModel.markShelved(item.ratingKey, true)
+                    1 -> viewModel.markCompleted(item.ratingKey, true)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
 
     private fun performSearch(query: String) {
         searchJob?.cancel()

@@ -291,16 +291,20 @@ class PlexRepository @Inject constructor(
                     val items = resp.body()?.mediaContainer?.metadata ?: emptyList()
                     val books = items.map { it.toAudioBook() }
 
-                    // Preserve completed flags before wiping the cache
-                    val completedKeys = libraryDao.getCompletedKeys().toSet()
+                    // Preserve completed + shelved flags before wiping the cache.
+                    // The refresh happens in a single @Transaction (refreshCachedLibrary)
+                    // so reactive Flows that JOIN this table (getContinueListening) emit
+                    // exactly once. The previous separate clearAll/insertAll/setCompleted
+                    // sequence emitted a transient empty list mid-refresh, which made the
+                    // Continue Listening section flicker and disappear.
+                    val completedKeys = libraryDao.getCompletedKeys()
+                    val shelvedKeys = libraryDao.getShelvedKeys()
 
-                    libraryDao.clearAll()
-                    libraryDao.insertAll(items.map { it.toCachedEntity() })
-
-                    // Re-apply completed flags
-                    completedKeys.forEach { key ->
-                        libraryDao.setCompleted(key, true)
-                    }
+                    libraryDao.refreshCachedLibrary(
+                        fresh = items.map { it.toCachedEntity() },
+                        completedKeys = completedKeys,
+                        shelvedKeys = shelvedKeys
+                    )
 
                     Result.Success(books)
                 } else {
@@ -316,6 +320,9 @@ class PlexRepository @Inject constructor(
         libraryDao.getBook(ratingKey)
     suspend fun setCompleted(ratingKey: String, completed: Boolean) {
         libraryDao.setCompleted(ratingKey, completed)
+    }
+    suspend fun setShelved(ratingKey: String, shelved: Boolean) {
+        libraryDao.setShelved(ratingKey, shelved)
     }
 
     fun searchLibrary(query: String): Flow<List<CachedLibraryEntity>> =
@@ -454,6 +461,7 @@ class PlexRepository @Inject constructor(
             // key should be /library/metadata/{trackRatingKey}
             val trackKey = if (key.startsWith("/library")) key else "/library/metadata/$ratingKey"
             plexServerApi.reportTimeline(
+                url = url(":/timeline"),
                 token = token,
                 ratingKey = ratingKey,
                 key = trackKey,

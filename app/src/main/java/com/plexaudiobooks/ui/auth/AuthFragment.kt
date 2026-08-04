@@ -91,7 +91,8 @@ class AuthFragment : Fragment() {
                 }
                 is AuthState.Success -> {
                     binding.progressBar.visibility = View.GONE
-                    // Skip server setup — go straight to server selection
+                    // Proceed to server/library selection (ServerSetupFragment handles the
+                    // home-user → server → library sub-flow).
                     findNavController().navigate(R.id.action_auth_to_serverSetup)
                 }
                 is AuthState.Error -> {

@@ -5,6 +5,7 @@
     android:id="@+id/nav_graph"
     app:startDestination="@id/authFragment">
 
+    <!-- Onboarding (start destination chosen at runtime in MainActivity) -->
     <fragment
         android:id="@+id/authFragment"
         android:name="com.plexaudiobooks.ui.auth.AuthFragment"
@@ -25,10 +26,12 @@
         <action
             android:id="@+id/action_serverSetup_to_library"
             app:destination="@id/libraryFragment"
-            app:popUpTo="@id/serverSetupFragment"
+            app:popUpTo="@id/nav_graph"
             app:popUpToInclusive="true" />
     </fragment>
 
+    <!-- Top-level tab destinations (bottom nav). Player is NOT a destination — it is a
+         sheet shown over whichever tab is active, driven by PlaybackManager. -->
     <fragment
         android:id="@+id/libraryFragment"
         android:name="com.plexaudiobooks.ui.library.LibraryFragment"
@@ -37,49 +40,19 @@
         <action
             android:id="@+id/action_library_to_detail"
             app:destination="@id/detailFragment" />
-        <action
-            android:id="@+id/action_library_to_downloads"
-            app:destination="@id/downloadsFragment" />
-        <action
-            android:id="@+id/action_library_to_settings"
-            app:destination="@id/settingsFragment" />
-        <action
-            android:id="@+id/action_library_to_player"
-            app:destination="@id/playerFragment" />
     </fragment>
 
     <fragment
-        android:id="@+id/detailFragment"
-        android:name="com.plexaudiobooks.ui.detail.DetailFragment"
-        android:label="Book Details"
-        tools:layout="@layout/fragment_detail">
-        <argument
-            android:name="ratingKey"
-            app:argType="string" />
-        <action
-            android:id="@+id/action_detail_to_player"
-            app:destination="@id/playerFragment" />
-    </fragment>
-
-    <fragment
-        android:id="@+id/playerFragment"
-        android:name="com.plexaudiobooks.ui.player.PlayerFragment"
+        android:id="@+id/dashboardFragment"
+        android:name="com.plexaudiobooks.ui.player.NowPlayingTabFragment"
         android:label="Now Playing"
-        tools:layout="@layout/fragment_player">
-        <argument
-            android:name="ratingKey"
-            app:argType="string" />
-    </fragment>
+        tools:layout="@layout/fragment_player" />
 
     <fragment
         android:id="@+id/downloadsFragment"
         android:name="com.plexaudiobooks.ui.downloads.DownloadsFragment"
         android:label="Downloads"
-        tools:layout="@layout/fragment_downloads">
-        <action
-            android:id="@+id/action_downloads_to_player"
-            app:destination="@id/playerFragment" />
-    </fragment>
+        tools:layout="@layout/fragment_downloads" />
 
     <fragment
         android:id="@+id/settingsFragment"
@@ -94,6 +67,17 @@
             app:destination="@id/authFragment"
             app:popUpTo="@id/nav_graph"
             app:popUpToInclusive="true" />
+    </fragment>
+
+    <!-- Book detail. Play now happens via PlaybackManager + the player sheet, not via nav. -->
+    <fragment
+        android:id="@+id/detailFragment"
+        android:name="com.plexaudiobooks.ui.detail.DetailFragment"
+        android:label="Book Details"
+        tools:layout="@layout/fragment_detail">
+        <argument
+            android:name="ratingKey"
+            app:argType="string" />
     </fragment>
 
 </navigation>

@@ -12,7 +12,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DownloadedBookEntity::class,
         CachedLibraryEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AudiobookDatabase : RoomDatabase() {
@@ -27,6 +27,17 @@ abstract class AudiobookDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE cached_library ADD COLUMN completed INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
+        // Migration 2→3: add 'shelved' column to cached_library.
+        // A shelved book is removed from Continue Listening without being marked completed;
+        // resume position is preserved and the book stays visible in the main grid.
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE cached_library ADD COLUMN shelved INTEGER NOT NULL DEFAULT 0"
                 )
             }
         }

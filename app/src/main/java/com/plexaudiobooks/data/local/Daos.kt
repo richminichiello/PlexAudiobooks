@@ -64,6 +64,31 @@ interface CachedLibraryDao {
 
     @Query("SELECT ratingKey FROM cached_library WHERE completed = 1")
     suspend fun getCompletedKeys(): List<String>
+
+    @Query("UPDATE cached_library SET shelved = :shelved WHERE ratingKey = :ratingKey")
+    suspend fun setShelved(ratingKey: String, shelved: Boolean)
+
+    @Query("SELECT ratingKey FROM cached_library WHERE shelved = 1")
+    suspend fun getShelvedKeys(): List<String>
+
+    /**
+     * Atomically refresh the cached library so reactive Flows (notably
+     * getContinueListening, which JOINs this table) emit exactly once instead of
+     * once-per-intermediate-write. Doing clearAll/insertAll/setCompleted/setShelved
+     * as separate statements caused a transient empty-list emission that made the
+     * Continue Listening section flicker and disappear on swipe-refresh.
+     */
+    @Transaction
+    suspend fun refreshCachedLibrary(
+        fresh: List<CachedLibraryEntity>,
+        completedKeys: List<String>,
+        shelvedKeys: List<String>
+    ) {
+        clearAll()
+        insertAll(fresh)
+        completedKeys.forEach { setCompleted(it, true) }
+        shelvedKeys.forEach { setShelved(it, true) }
+    }
 }
 
 // Paging 3 support — returns a PagingSource so the library grid loads
@@ -93,16 +118,18 @@ interface CachedLibraryPagingDao {
     @Query("SELECT ratingKey FROM downloaded_books")
     fun getDownloadedKeys(): Flow<List<String>>
 
-    // Books with progress but not completed (Continue Listening)
+    // Books with progress but not completed and not shelved (Continue Listening)
     @Query("""
     SELECT cl.ratingKey, cl.title, cl.author, cl.thumbPath,
            cl.durationMs, cl.viewOffset, cl.addedAt,
            COALESCE(cl.completed, 0) AS completed,
+           COALESCE(cl.shelved, 0) AS shelved,
            pp.positionMs, pp.lastUpdated
     FROM cached_library cl
     INNER JOIN playback_progress pp ON CAST(cl.ratingKey AS TEXT) = CAST(pp.ratingKey AS TEXT)
     WHERE pp.positionMs > 0
       AND (cl.completed = 0 OR cl.completed IS NULL)
+      AND (cl.shelved = 0 OR cl.shelved IS NULL)
     ORDER BY pp.lastUpdated DESC
     LIMIT 20
 """)
@@ -123,6 +150,7 @@ data class ContinueListeningItem(
     val viewOffset: Long,
     val addedAt: Long,
     val completed: Boolean = false,
+    val shelved: Boolean = false,
     // from playback_progress JOIN
     val positionMs: Long,
     val lastUpdated: Long

@@ -58,7 +58,10 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     private lateinit var audioManager: AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
 
-    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob() +
+            CoroutineExceptionHandler { _, e ->
+                Log.e(TAG, "Uncaught exception in service coroutine: ${e.message}", e)
+            })
     private var progressJob: Job? = null
     private var stateUpdateJob: Job? = null
 
@@ -217,7 +220,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         override fun onPlay() {
             if (requestAudioFocus()) {
                 exoPlayer.play()
-                startForegroundNotification()
+                safeStartForeground()
             }
         }
 
@@ -321,7 +324,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
 
         updateSessionMetadata()
         updatePlaybackState()
-        startForegroundNotification()
+        safeStartForeground()
         startProgressReporting()
         startStateUpdating()
     }
@@ -468,15 +471,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             updatePlaybackState()
             if (isPlaying) {
-                try {
-                    startForegroundNotification()
-                } catch (e: Exception) {
-                    // Android 12+ throws ForegroundServiceStartNotAllowedException
-                    // when audio focus returns while the app is in the background.
-                    // The service is already running — just update the notification
-                    // state without promoting to foreground from this context.
-                    Log.w(TAG, "startForeground blocked (app in background): ${e.message}")
-                }
+                safeStartForeground()
             } else {
                 stopForeground(STOP_FOREGROUND_DETACH)
                 if (!pausedForFocusLoss) {
@@ -491,7 +486,13 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                 serviceScope.launch {
                     val ratingKey = currentRatingKey ?: return@launch
                     val pos = exoPlayer.currentPosition
+                    val exoDuration = exoPlayer.duration
                     val download = repository.getDownload(ratingKey)
+
+                    Log.w(TAG, "STATE_ENDED fired: pos=${pos}ms, exoDuration=${exoDuration}ms, " +
+                            "downloadedUpToMs=${download?.downloadedUpToMs}ms, " +
+                            "bookDurationMs=${download?.durationMs}ms, " +
+                            "streamUrl=${session.serverUrl != null}")
 
                     // If we have a partial local file and the position hasn't
                     // actually reached the full book duration, ExoPlayer hit the
@@ -514,12 +515,19 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                             exoPlayer.seekTo(pos)
                             exoPlayer.play()
                             return@launch  // not a real end — don't mark complete or stop
+                        } else {
+                            Log.w(TAG, "STATE_ENDED: could not build stream URL — " +
+                                    "serverUrl is null. Cannot switch to streaming.")
                         }
                     }
 
-                    // Real end of book — save, mark complete, stop service
+                    // Real end of book — save, mark complete, reset position, stop service
+                    Log.i(TAG, "STATE_ENDED: treating as real book end")
+                    val endDur = download?.durationMs ?: exoDuration
                     saveProgress("stopped")
                     repository.setCompleted(ratingKey, true)
+                    // Reset saved position to 0 so replaying starts from the beginning
+                    repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, 0L, endDur)
                     stateUpdateJob?.cancel()
                     progressJob?.cancel()
                     abandonAudioFocus()
@@ -583,6 +591,26 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         }
         getSystemService(NotificationManager::class.java)
             ?.createNotificationChannel(channel)
+    }
+
+    /**
+     * Promotes the service to foreground promotion wrapped in a try/catch.
+     *
+     * Android 12+ throws ForegroundServiceStartNotAllowedException when audio focus
+     * returns / a play command fires while the app is in the background. There are THREE
+     * call sites that can reach this path (onPlay, playBook, onIsPlayingChanged). All
+     * used to call startForegroundNotification() directly; onIsPlayingChanged was the only
+     * one guarded. Guarding all three here means a background-restricted start logs a
+     * warning instead of crashing the service (which was the "playback dies, can't restart
+     * without force-quit" symptom). The notification reappears the next time the app is
+     * foregrounded. Do NOT remove this wrapper.
+     */
+    private fun safeStartForeground() {
+        try {
+            startForegroundNotification()
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground blocked (app in background): ${e.message}")
+        }
     }
 
     private fun startForegroundNotification() {
@@ -659,13 +687,11 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
             else -> return
         }
         if (pos <= 0) return
-        repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, pos, dur)
-        repository.reportProgressToPlex(ratingKey, key, pos, dur, state)
-
-        // Auto-complete: mark book finished if within the configured threshold
-        val thresholdMs = session.autoCompleteMinutes * 60 * 1000L
-        if (dur > 0 && (dur - pos) <= thresholdMs && pos < dur) {
-            repository.setCompleted(ratingKey, true)
+        try {
+            repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, pos, dur)
+            repository.reportProgressToPlex(key, key, pos, dur, state)
+        } catch (e: Exception) {
+            Log.e(TAG, "saveProgress failed: ${e.message}", e)
         }
     }
 

@@ -84,8 +84,11 @@ interface PlexServerApi {
     // /:/progress is deprecated and does not sync with the Plex dashboard.
     // ratingKey = track ratingKey (not album), time = ms from track start,
     // key = /library/metadata/{trackRatingKey}, hasMDE=1 enables media dashboard activity.
-    @GET("/:/timeline")
+    // Uses @Url so the full server URL is passed at call time — the Retrofit base URL
+    // is http://localhost/ which would never reach the actual Plex server.
+    @GET
     suspend fun reportTimeline(
+        @Url url: String,
         @Header("X-Plex-Token") token: String,
         @Query("ratingKey") ratingKey: String,
         @Query("key") key: String,

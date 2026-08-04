@@ -131,6 +131,15 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
+    // "Put this book back on the shelf": remove from Continue Listening without
+    // marking it completed. Resume position is preserved and the book stays in the
+    // main browse grid. It returns to Continue Listening on the next play.
+    fun markShelved(ratingKey: String, shelved: Boolean) {
+        viewModelScope.launch {
+            repository.setShelved(ratingKey, shelved)
+        }
+    }
+
     fun searchBooks(query: String): Flow<List<CachedLibraryEntity>> =
         repository.searchLibrary(query)
 
