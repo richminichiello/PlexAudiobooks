@@ -7,6 +7,7 @@ import com.plexaudiobooks.data.local.*
 import com.plexaudiobooks.data.model.*
 import com.plexaudiobooks.util.SessionManager
 import android.util.Log
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -457,20 +458,27 @@ class PlexRepository @Inject constructor(
                                      positionMs: Long, durationMs: Long, state: String) {
         val token = session.serverToken ?: session.authToken ?: return
         try {
-            // Use /:/timeline (Chronicle-confirmed correct endpoint).
-            // key should be /library/metadata/{trackRatingKey}
-            val trackKey = if (key.startsWith("/library")) key else "/library/metadata/$ratingKey"
+            // Use /:/timeline (Chronicle-confirmed correct endpoint). Both args are the
+            // TRACK ratingKey (PlaybackManager.sendPlayIntent passes AudioBook.trackRatingKey
+            // into EXTRA_KEY). The `key` query param is the metadata key Plex resolves the
+            // timeline entry by — always /library/metadata/{ratingKey}. We no longer trust
+            // the caller's string shape (an earlier heuristic passed a /library/parts/…
+            // part key through unchanged when it started with "/library", so Plex silently
+            // dropped every progress report — see 1.6.5 progress-sync regression fix). If
+            // the caller already wrapped it, strip and re-wrap to be safe.
+            val timelineRatingKey = key.removePrefix("/library/metadata/")
+            val metadataKey = "/library/metadata/$timelineRatingKey"
             plexServerApi.reportTimeline(
                 url = url(":/timeline"),
                 token = token,
-                ratingKey = ratingKey,
-                key = trackKey,
+                ratingKey = timelineRatingKey,
+                key = metadataKey,
                 timeMs = positionMs,
                 state = state,
                 duration = durationMs,
                 hasMde = 1
             )
-            Log.d("PlexRepo", "reportTimeline: ratingKey=$ratingKey state=$state pos=${positionMs/1000}s")
+            Log.d("PlexRepo", "reportTimeline: ratingKey=$timelineRatingKey state=$state pos=${positionMs/1000}s")
         } catch (e: Exception) {
             Log.w("PlexRepo", "reportTimeline failed: ${e.message}")
         }
@@ -488,6 +496,24 @@ class PlexRepository @Inject constructor(
 
     suspend fun deleteDownload(ratingKey: String) =
         downloadDao.deleteDownloadByKey(ratingKey)
+
+    /**
+     * Deletes the on-disk audio file (if present) AND the `downloaded_books` DB row.
+     *
+     * This is the correct delete — the legacy [deleteDownload] removes ONLY the DB row,
+     * which orphaned the audio file on disk (a latent leak shared by the old Detail and
+     * Downloads manual-deletes, and by completion once it starts auto-evicting cache).
+     * All new deletion paths — auto-complete cache eviction, explicit "Remove download",
+     * Downloads trash button — go through here so file + row always go together.
+     *
+     * Safe to call when no row exists (no-op) and when the file is already gone
+     * (`runCatching` swallows the missing-file case without throwing).
+     */
+    suspend fun deleteDownloadAndFile(ratingKey: String) {
+        val d = downloadDao.getDownload(ratingKey) ?: return
+        runCatching { File(d.localFilePath).delete() }
+        downloadDao.deleteDownloadByKey(ratingKey)
+    }
 
     // ── Mappers ──────────────────────────────────────────────────────────────
 

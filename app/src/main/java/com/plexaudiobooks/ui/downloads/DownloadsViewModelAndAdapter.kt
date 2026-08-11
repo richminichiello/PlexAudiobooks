@@ -30,7 +30,7 @@ class DownloadsViewModel @Inject constructor(
 
     fun deleteDownload(ratingKey: String) {
         viewModelScope.launch {
-            repository.deleteDownload(ratingKey)
+            repository.deleteDownloadAndFile(ratingKey)  // frees the file too, not just the row
         }
     }
 

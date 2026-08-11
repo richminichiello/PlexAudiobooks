@@ -24,7 +24,13 @@ data class DownloadedBookEntity(
     val durationMs: Long,
     val fileSizeBytes: Long,
     val downloadedAt: Long = System.currentTimeMillis(),
-    val downloadedUpToMs: Long   // how many ms of audio are cached
+    val downloadedUpToMs: Long,   // how many ms of audio are cached
+    // v1.6.2: durable flag — distinguishes an explicit full-book download (true, set by
+    // the Detail "Download" button) from an invisible read-ahead cache file (false, set by
+    // triggerReadAheadIfNeeded). Only non-durable cache files are auto-deleted on book
+    // completion; durable downloads persist until the user explicitly removes them.
+    // DEFAULT 0 (false) so every existing read-ahead row on disk stays cache after migration.
+    val durable: Boolean = false
 )
 
 @Entity(tableName = "cached_library")

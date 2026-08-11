@@ -19,10 +19,13 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.scan
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -90,9 +93,45 @@ class LibraryViewModel @Inject constructor(
             }
             .cachedIn(viewModelScope)
 
-    // Continue Listening: books with progress, not finished, ordered by most recent
+    // Continue Listening: books with progress, not finished, ordered by most recent.
+    //
+    // getContinueListening() is a JOIN of cached_library ⋈ playback_progress. The JOIN can
+    // emit a transient empty list in TWO situations:
+    //   1. A library refresh (refreshCachedLibrary clears + re-inserts cached_library) — the
+    //      @Transaction is supposed to batch the writes, but concurrent playback_progress
+    //      saves plus large inserts leak the empty intermediate on some Room versions.
+    //   2. An ordinary playback_progress save while NOT refreshing — the service's 10s loop
+    //      and PlaybackManager.play()'s seed-progress write touch playback_progress, re-emit
+    //      the JOIN, and can transiently produce []. This fires whenever the user interacts
+    //      with the mini-player / player sheet (play/pause, seek, chapter taps).
+    // The 1.6.3 fix only guarded case #1 (gated the hold on ui.isLoading), so opening the
+    // mini-player and tapping in it blanked the section. A pull-to-refresh sometimes brought
+    // rows back because the refresh path IS covered; the playback-save path was not.
+    //
+    // Suppress both: debounce the source so a rapid []→pop pair collapses to the pop, then
+    // use a scan that bridges AT MOST ONE transient empty (holding the last non-empty list
+    // for exactly one empty emission) so a genuine persistent empty still passes through —
+    // finishing the last book removes it from the section instead of trapping a stale list.
+    // distinctUntilChanged avoids redundant submitList calls.
+    @OptIn(ExperimentalCoroutinesApi::class)
     val continueListening: Flow<List<ContinueListeningItem>> =
         libraryPagingDao.getContinueListening()
+            .debounce(250)
+            .combine(_uiState) { items, _ -> items }
+            .scan(emptyList<ContinueListeningItem>() to false) { (held, heldOnce), items ->
+                when {
+                    items.isNotEmpty() -> items to false
+                    // Source just emitted empty while we have a non-empty list to bridge with,
+                    // and this is the FIRST empty in a row → hold the last real list so a
+                    // one-emission transient gap (a mid-save re-emit) never blanks the section.
+                    held.isNotEmpty() && !heldOnce -> held to true
+                    // A SECOND consecutive empty (or a genuine empty with nothing to bridge):
+                    // pass it through so a book that actually finished leaves the section.
+                    else -> items to false
+                }
+            }
+            .map { it.first }
+            .distinctUntilChanged()
 
     // Completed books section
     val completedBooks: Flow<List<CachedLibraryEntity>> =
@@ -128,6 +167,15 @@ class LibraryViewModel @Inject constructor(
     fun markCompleted(ratingKey: String, completed: Boolean) {
         viewModelScope.launch {
             repository.setCompleted(ratingKey, completed)
+            // Auto-evict a non-durable read-ahead cache when marking complete — but NEVER a
+            // durable download (those persist across completion; a book downloaded for a
+            // flight shouldn't vanish mid-flight). Only when completed == true: marking a
+            // book UNREAD must not free a downloaded book (the user may be undoing an
+            // accidental completion).
+            if (completed) {
+                val d = repository.getDownload(ratingKey)
+                if (d != null && !d.durable) repository.deleteDownloadAndFile(ratingKey)
+            }
         }
     }
 

@@ -79,7 +79,13 @@ class DetailViewModel @Inject constructor(
             author     = book.author,
             thumbPath  = book.thumbPath,
             partKeys   = allPartKeys,
-            durationMs = book.duration
+            durationMs = book.duration,
+            // Grab the WHOLE book (not the read-ahead hours-cap): pass the full duration as
+            // the cache target so the worker treats anything >= contentLength as "download
+            // full file" and ignores downloadHours. durable=true so the result persists
+            // across completion (only read-ahead cache is auto-deleted on book end).
+            targetCachedUpToMs = book.duration,
+            durable  = true
         )
         WorkManager.getInstance(context).enqueue(request)
     }
@@ -92,7 +98,7 @@ class DetailViewModel @Inject constructor(
         val ratingKey = _uiState.value.book?.ratingKey ?: return
         viewModelScope.launch {
             WorkManager.getInstance(context).cancelAllWorkByTag(ratingKey)
-            repository.deleteDownload(ratingKey)
+            repository.deleteDownloadAndFile(ratingKey)  // frees the file too, not just the row
             _uiState.value = _uiState.value.copy(isDownloaded = false)
         }
     }

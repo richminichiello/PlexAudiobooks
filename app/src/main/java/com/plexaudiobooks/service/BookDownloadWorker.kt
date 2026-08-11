@@ -60,6 +60,7 @@ class BookDownloadWorker @AssistedInject constructor(
         const val KEY_PROGRESS               = "progress"
         const val KEY_ERROR                  = "error"
         const val KEY_TARGET_CACHED_UP_TO_MS = "target_cached_up_to_ms"  // 0 = use downloadHours from 0
+        const val KEY_DURABLE                = "durable"  // true = explicit full-book download (persists across completion)
 
         fun buildRequest(
             ratingKey: String,
@@ -68,7 +69,8 @@ class BookDownloadWorker @AssistedInject constructor(
             thumbPath: String?,
             partKeys: List<String>,
             durationMs: Long,
-            targetCachedUpToMs: Long = 0L
+            targetCachedUpToMs: Long = 0L,
+            durable: Boolean = false
         ): OneTimeWorkRequest {
             return OneTimeWorkRequestBuilder<BookDownloadWorker>()
                 .setInputData(workDataOf(
@@ -78,7 +80,8 @@ class BookDownloadWorker @AssistedInject constructor(
                     KEY_THUMB_PATH             to thumbPath,
                     KEY_PART_KEYS              to partKeys.joinToString(","),
                     KEY_DURATION_MS            to durationMs,
-                    KEY_TARGET_CACHED_UP_TO_MS to targetCachedUpToMs
+                    KEY_TARGET_CACHED_UP_TO_MS to targetCachedUpToMs,
+                    KEY_DURABLE                to durable
                 ))
                 .setConstraints(Constraints.Builder()
                     .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -105,6 +108,7 @@ class BookDownloadWorker @AssistedInject constructor(
         val partKeysStr        = inputData.getString(KEY_PART_KEYS)    ?: return@withContext fail("No part keys provided — book has no playable media")
         val partKeys           = partKeysStr.split(",").filter { it.isNotBlank() }
         val targetCachedUpToMs = inputData.getLong(KEY_TARGET_CACHED_UP_TO_MS, 0L)
+        val durable  = inputData.getBoolean(KEY_DURABLE, false)
 
         if (partKeys.isEmpty()) {
             return@withContext fail("No part keys — tap on the book to load its details first, then try downloading again")
@@ -145,6 +149,7 @@ class BookDownloadWorker @AssistedInject constructor(
                 partKey       = partKeys.first(),
                 durationMs    = durationMs,
                 targetCachedUpToMs = targetCachedUpToMs,
+                durable       = durable,
                 existing      = existingDownload!!,
                 serverUrl     = serverUrl,
                 token         = token,
@@ -304,7 +309,8 @@ class BookDownloadWorker @AssistedInject constructor(
             downloadedUpToMs = if (totalContentLength > 0 && durationMs > 0)
                 (totalBytesDownloaded.toDouble() / totalContentLength * durationMs)
                     .toLong().coerceAtMost(durationMs)
-            else durationMs
+            else durationMs,
+            durable          = durable
         ))
 
         setProgress(workDataOf(KEY_PROGRESS to 100))
@@ -328,6 +334,7 @@ class BookDownloadWorker @AssistedInject constructor(
         partKey: String,
         durationMs: Long,
         targetCachedUpToMs: Long,
+        durable: Boolean,
         existing: DownloadedBookEntity,
         serverUrl: String,
         token: String,
@@ -425,7 +432,12 @@ class BookDownloadWorker @AssistedInject constructor(
 
             repository.saveDownload(existing.copy(
                 fileSizeBytes    = totalBytesOnDisk,
-                downloadedUpToMs = newDownloadedUpToMs
+                downloadedUpToMs = newDownloadedUpToMs,
+                // Preserve durability: an extend of a durable download stays durable
+                // (never silently downgrades to cache), and an extend of a cache stays
+                // cache. We also OR in the incoming flag so a durable call never loses
+                // durability if the existing row was newly promoted.
+                durable          = existing.durable || durable
             ))
 
             Log.i(TAG, "=== Extend complete: cached up to ${newDownloadedUpToMs}ms " +

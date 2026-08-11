@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.graphics.Bitmap
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -26,6 +27,10 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.work.WorkManager
+import com.bumptech.glide.Glide
+import com.bumptech.glide.request.target.CustomTarget
+import com.bumptech.glide.request.target.Target
+import com.bumptech.glide.request.transition.Transition
 import com.plexaudiobooks.R
 import com.plexaudiobooks.data.PlexRepository
 import com.plexaudiobooks.data.model.Chapter
@@ -73,6 +78,27 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     private var currentChapters: List<Chapter> = emptyList()
     private var currentChapterIndex: Int = 0
     private var pausedForFocusLoss = false
+    // True while the current ExoPlayer media item is a local file:// URI. Used by the
+    // STATE_ENDED handler to tell a genuine server-stream end (→ mark complete, evict
+    // cache) from a truncated local-file end (→ switch to server stream and keep going).
+    // Storing this explicitly (rather than reading exoPlayer.currentMediaItem) is robust:
+    // currentMediaItem can be null/stale across the setMediaItem transition mid-callback.
+    private var currentSourceIsLocal: Boolean = false
+
+    // Notification / car-display cover art. The system MediaStyle notification + lock
+    // screen + Android Auto + Bluetooth AVRCP render artwork ONLY from Bitmap metadata
+    // (METADATA_KEY_ART / METADATA_KEY_ALBUM_ART); the URI variants we set below are
+    // un-resolved hints the framework never fetches for MediaSessionCompat. So we load the
+    // cover into a Bitmap here (via Glide, which already caches covers on disk+memory for
+    // the library screen) and put the Bitmap into the metadata. Cached by thumbUrl so the
+    // every-500ms chapter loop / seeks don't re-fetch. Cleared on book switch + onDestroy.
+    private var cachedArtBitmap: Bitmap? = null
+    private var cachedArtThumbUrl: String? = null
+    private var artTarget: CustomTarget<Bitmap>? = null
+    // The thumbUrl a Glide load is currently fetching, or null when idle. Distinct from
+    // cachedArtThumbUrl (which only advances on success) so a chapter change mid-fetch
+    // for the same URL doesn't fire a second duplicate load.
+    private var inflightArtUrl: String? = null
 
     companion object {
         private const val TAG = "AudiobookService"
@@ -141,6 +167,8 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                 exoPlayer.clearMediaItems()
                 currentChapters = emptyList()
                 currentChapterIndex = 0
+                currentSourceIsLocal = false  // reset; playBook() sets it for the new book
+                clearArt()
                 stateUpdateJob?.cancel()
                 abandonAudioFocus()
             }
@@ -186,6 +214,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         stateUpdateJob?.cancel()
         progressJob?.cancel()
         abandonAudioFocus()
+        clearArt()
         mediaSession.isActive = false
         mediaSession.release()
         exoPlayer.removeListener(exoPlayerListener)
@@ -233,8 +262,7 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         override fun onStop() {
             exoPlayer.stop()
             serviceScope.launch { saveProgress("stopped") }
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopPlaybackAndService()
         }
 
         override fun onSeekTo(pos: Long) {
@@ -309,6 +337,10 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         currentTitle = title
         currentAuthor = author
         pausedForFocusLoss = false
+        // A file:// streamUrl means we're playing the cached local file; anything else
+        // (http/https) is a direct server stream. Recorded so STATE_ENDED can tell a
+        // genuine stream end from a truncated local-file end.
+        currentSourceIsLocal = streamUrl.startsWith("file://")
 
         exoPlayer.setMediaItem(MediaItem.fromUri(streamUrl))
         exoPlayer.prepare()
@@ -417,10 +449,81 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                     putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ART_URI, it)
                     putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON_URI, it)
                 }
+                // The system MediaStyle notification / lock screen / car / Bluetooth render
+                // cover art ONLY from these Bitmap keys (not the URI variants above). Glide
+                // already disk-caches covers for the library, so this usually hits cache.
+                cachedArtBitmap?.let { bmp ->
+                    putBitmap(MediaMetadataCompat.METADATA_KEY_ART, bmp)
+                    putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, bmp)
+                }
             }
             .build()
 
         mediaSession.setMetadata(metadata)
+
+        // If the cover URL changed (new book, or first time we have a thumb), fetch it
+        // async. The fetch re-sets metadata once the bitmap is ready — the system observes
+        // the session and re-renders the MediaStyle notification, so no explicit notification
+        // refresh is needed here. Chapter changes call this method but hit the cache (same
+        // thumbUrl) and skip the fetch.
+        loadArtIfNeeded()
+    }
+
+    /**
+     * Fetches the book cover into [cachedArtBitmap] via Glide when the thumb URL changed.
+     * Cached by [cachedArtThumbUrl]; chapter changes / seeks that re-call
+     * [updateSessionMetadata] hit the cache and skip. In-flight fetches are cancelled when
+     * a new URL arrives so a slow old load can't overwrite a fresh one. Runs on the main
+     * thread (Glide handles the IO + decode off-thread); on completion it stores the
+     * bitmap and re-applies metadata so the notification picks up the art.
+     */
+    private fun loadArtIfNeeded() {
+        val url = currentThumbUri
+        // Already have it cached, or already fetching this exact URL → nothing to do.
+        if (url == null) return
+        if (url == cachedArtThumbUrl && cachedArtBitmap != null) return
+        if (url == inflightArtUrl) return
+        // Cancel any in-flight Glide load for a different URL.
+        artTarget?.let { Glide.with(applicationContext).clear(it) }
+        cachedArtBitmap = null
+        inflightArtUrl = url
+        val target = object : CustomTarget<Bitmap>(512, 512) {
+            override fun onResourceReady(resource: Bitmap, transition: Transition<in Bitmap>?) {
+                cachedArtBitmap = resource
+                cachedArtThumbUrl = url
+                inflightArtUrl = null
+                // Re-apply metadata so the bitmap lands in the session — the system
+                // re-renders the MediaStyle notification from the new metadata.
+                updateSessionMetadata()
+                // Refresh the foreground notification so its large icon updates too.
+                if (exoPlayer.isPlaying || exoPlayer.playbackState == Player.STATE_READY ||
+                    exoPlayer.playbackState == Player.STATE_BUFFERING) {
+                    safeStartForeground()
+                }
+            }
+            override fun onLoadCleared(placeholder: android.graphics.drawable.Drawable?) {
+                inflightArtUrl = null
+            }
+            override fun onLoadFailed(errorDrawable: android.graphics.drawable.Drawable?) {
+                inflightArtUrl = null
+                // Non-fatal: notification shows with no art (text-only), as before.
+                Log.w(TAG, "Notification art load failed for $url")
+            }
+        }
+        artTarget = target
+        // applicationContext so the load Survives service teardown and rides Glide's
+        // disk/memory cache (covers are already cached from the library screen).
+        Glide.with(applicationContext).asBitmap().load(url).into(target)
+    }
+
+    /** Drops the cached cover bitmap + cancels any in-flight Glide load. Called on book
+     *  switch and in onDestroy so a stale cover can't bleed into the next book. */
+    private fun clearArt() {
+        artTarget?.let { Glide.with(applicationContext).clear(it) }
+        artTarget = null
+        inflightArtUrl = null
+        cachedArtBitmap = null
+        cachedArtThumbUrl = null
     }
 
     // ── State update loop ─────────────────────────────────────────────────────
@@ -494,11 +597,18 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                             "bookDurationMs=${download?.durationMs}ms, " +
                             "streamUrl=${session.serverUrl != null}")
 
-                    // If we have a partial local file and the position hasn't
-                    // actually reached the full book duration, ExoPlayer hit the
-                    // end of the truncated file — not the real end of the book.
-                    // Switch to streaming from the server to continue playback.
-                    if (download != null &&
+                    // If we WERE playing a local file and that file is a partial cache
+                    // (downloadedUpToMs < durationMs) AND the position hasn't actually
+                    // reached the full book duration, ExoPlayer hit the end of the truncated
+                    // file — not the real end of the book. Switch to streaming from the
+                    // server to continue playback.
+                    //
+                    // Gated on currentSourceIsLocal: a streamed (http) book that ends here
+                    // is the genuine end of the server stream, even if a partial read-ahead
+                    // cache row exists (downloadedUpToMs < durationMs) — switching to the
+                    // same server stream would just loop forever. So server-stream ends fall
+                    // straight through to the real-end branch below.
+                    if (currentSourceIsLocal && download != null &&
                         download.downloadedUpToMs < download.durationMs &&
                         pos < download.durationMs - 10_000L) {
 
@@ -514,6 +624,10 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                             exoPlayer.prepare()
                             exoPlayer.seekTo(pos)
                             exoPlayer.play()
+                            // We just switched to a server stream — the next STATE_ENDED
+                            // (from this new stream) is the real book end, not another
+                            // truncated-file end. Flip the flag so it routes to real-end.
+                            currentSourceIsLocal = false
                             return@launch  // not a real end — don't mark complete or stop
                         } else {
                             Log.w(TAG, "STATE_ENDED: could not build stream URL — " +
@@ -521,17 +635,35 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
                         }
                     }
 
-                    // Real end of book — save, mark complete, reset position, stop service
+                    // Real end of book — save, mark complete, reset position, stop service.
+                    // Reached for: a server stream that ended, OR a fully-cached local file
+                    // that played to the end (downloadedUpToMs >= durationMs or pos near it).
                     Log.i(TAG, "STATE_ENDED: treating as real book end")
                     val endDur = download?.durationMs ?: exoDuration
                     saveProgress("stopped")
                     repository.setCompleted(ratingKey, true)
+                    // Free a read-ahead cache when the book is genuinely done — but NEVER
+                    // a durable download: those are explicit user downloads meant to persist
+                    // (a book downloaded for a flight shouldn't vanish because you finished
+                    // it mid-flight). `download?.durable != true` covers download == null
+                    // (streamed book with no cache row — no-op) AND non-durable rows, while
+                    // sparing durable ones. deleteDownloadAndFile is a no-op when no row exists.
+                    if (download?.durable != true) {
+                        repository.deleteDownloadAndFile(ratingKey)
+                    }
                     // Reset saved position to 0 so replaying starts from the beginning
                     repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, 0L, endDur)
-                    stateUpdateJob?.cancel()
-                    progressJob?.cancel()
-                    abandonAudioFocus()
-                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    // Hand teardown to the same path the MediaSession onStop() callback uses,
+                    // so the player is stopped and the service stopSelf()s exactly once. The
+                    // old code did this teardown INLINE inside the ExoPlayer listener (no
+                    // exoPlayer.stop(), no stopSelf()) — racing the MediaSession while a
+                    // suspend DB delete (deleteDownloadAndFile) interleaved, and leaving the
+                    // service with no foreground notification. On Android 12+ the system then
+                    // killed the service → the app just disappeared at end of book. Routing
+                    // through stopPlaybackAndService() stops ExoPlayer on the main thread and
+                    // actually stops the service, so neither the race nor the no-notification
+                    // kill happens.
+                    stopPlaybackAndService()
                 }
             }
         }
@@ -576,6 +708,24 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
     private fun abandonAudioFocus() {
         audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         audioFocusRequest = null
+    }
+
+    /** Consistent teardown: cancel state/progress jobs, drop audio focus, stop ExoPlayer,
+     *  remove the foreground notification, and stop the service. Used by BOTH the
+     *  MediaSession onStop() callback and the STATE_ENDED real-end branch so teardown
+     *  happens through one path exactly once. Previously the real-end branch did a subset
+     *  of this inline inside the ExoPlayer onPlaybackStateChanged callback (with no
+     *  exoPlayer.stop() and no stopSelf()) — that raced the MediaSession while a suspend
+     *  DB delete interleaved and left the service with no foreground notification, so on
+     *  Android 12+ the system killed it and the app vanished at end of book. Do NOT revert
+     *  to inline teardown in the real-end branch. */
+    private fun stopPlaybackAndService() {
+        stateUpdateJob?.cancel()
+        progressJob?.cancel()
+        abandonAudioFocus()
+        exoPlayer.stop()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     // ── Notification ──────────────────────────────────────────────────────────
@@ -630,6 +780,12 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
             .setContentTitle(description?.title ?: currentTitle ?: "PlexAudiobooks")
             .setContentText(description?.subtitle ?: currentAuthor ?: "")
             .setSubText(currentTitle ?: "")
+            // Book cover as the large icon of the expanded notification. The full-bleed
+            // background art for the system MediaStyle / lock screen comes from the
+            // METADATA_KEY_ART bitmap set in updateSessionMetadata(); setLargeIcon covers
+            // the inline large-icon slot so the dropdown thumbnail also shows the cover
+            // (matching Spotify / Plex Amp).
+            .setLargeIcon(cachedArtBitmap)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
@@ -688,6 +844,12 @@ class AudiobookPlaybackService : MediaBrowserServiceCompat() {
         }
         if (pos <= 0) return
         try {
+            // Local resume position is keyed by the ALBUM ratingKey (so Continue Listening,
+            // which JOINs on ratingKey, matches). The Plex timeline sync uses the TRACK
+            // ratingKey — currentKey now carries that (see PlaybackManager.sendPlayIntent).
+            // reportProgressToPlex passes it as both the ratingKey and the `key` it builds
+            // /library/metadata/{key} from. Sending the album ratingKey here (or the part
+            // key the old PlaybackManager path sent) is silently dropped by Plex.
             repository.saveProgress(ratingKey, currentTitle ?: "", currentAuthor, pos, dur)
             repository.reportProgressToPlex(key, key, pos, dur, state)
         } catch (e: Exception) {

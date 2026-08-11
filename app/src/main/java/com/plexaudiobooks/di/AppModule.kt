@@ -115,7 +115,11 @@ object AppModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): AudiobookDatabase =
         Room.databaseBuilder(context, AudiobookDatabase::class.java, "audiobooks.db")
-            .addMigrations(AudiobookDatabase.MIGRATION_1_2, AudiobookDatabase.MIGRATION_2_3)
+            .addMigrations(
+                AudiobookDatabase.MIGRATION_1_2,
+                AudiobookDatabase.MIGRATION_2_3,
+                AudiobookDatabase.MIGRATION_3_4
+            )
             .fallbackToDestructiveMigration()
             .build()
 

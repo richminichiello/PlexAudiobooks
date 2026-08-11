@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- These three ids match nav destination ids so setupWithNavController binds them.
+         The full player is reached via the mini-player bar (which expands the player sheet),
+         not a tab — see MainActivity.showPlayerSheet(). -->
+    <item
+        android:id="@+id/libraryFragment"
+        android:icon="@drawable/ic_nav_library"
+        android:title="@string/my_library" />
+
+    <item
+        android:id="@+id/downloadsFragment"
+        android:icon="@drawable/ic_download"
+        android:title="@string/downloads" />
+
+    <item
+        android:id="@+id/settingsFragment"
+        android:icon="@drawable/ic_nav_settings"
+        android:title="@string/settings" />
+
+</menu>

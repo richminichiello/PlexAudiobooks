@@ -30,8 +30,8 @@
             app:popUpToInclusive="true" />
     </fragment>
 
-    <!-- Top-level tab destinations (bottom nav). Player is NOT a destination — it is a
-         sheet shown over whichever tab is active, driven by PlaybackManager. -->
+    <!-- Top-level tab destinations (bottom nav). The player is NOT a destination — it is
+         a sheet shown over whichever tab is active, driven by PlaybackManager. -->
     <fragment
         android:id="@+id/libraryFragment"
         android:name="com.plexaudiobooks.ui.library.LibraryFragment"
@@ -41,12 +41,6 @@
             android:id="@+id/action_library_to_detail"
             app:destination="@id/detailFragment" />
     </fragment>
-
-    <fragment
-        android:id="@+id/dashboardFragment"
-        android:name="com.plexaudiobooks.ui.player.NowPlayingTabFragment"
-        android:label="Now Playing"
-        tools:layout="@layout/fragment_player" />
 
     <fragment
         android:id="@+id/downloadsFragment"
