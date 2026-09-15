@@ -21,8 +21,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
-import androidx.media3.session.MediaLibrarySession
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionError
 import androidx.work.WorkManager
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -75,7 +76,7 @@ import javax.inject.Inject
  */
 @AndroidEntryPoint
 @androidx.media3.common.util.UnstableApi
-class AudiobookPlaybackService : MediaSessionService() {
+class AudiobookPlaybackService : MediaLibraryService() {
 
     @Inject lateinit var repository: PlexRepository
     @Inject lateinit var session: SessionManager
@@ -203,11 +204,15 @@ class AudiobookPlaybackService : MediaSessionService() {
         }
 
         // ── Android Auto browse tree ──────────────────────────────────────────
+        // Car-facing browsing. Root has three children (Continue Listening,
+        // Recently Added, Library); each child returns playable MediaItems via
+        // bookToMediaItem(). All play requests then flow through onAddMediaItems,
+        // which feeds resolveThinItem the same way PlaybackManager would.
 
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
-            params: LibraryParams?
+            params: MediaLibraryService.LibraryParams?
         ): ListenableFuture<LibraryResult<MediaItem>> {
             val root = MediaItem.Builder()
                 .setMediaId("root")
@@ -228,12 +233,11 @@ class AudiobookPlaybackService : MediaSessionService() {
             parentId: String,
             page: Int,
             pageSize: Int,
-            params: LibraryParams?
+            params: MediaLibraryService.LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             return guavaFuture {
                 when (parentId) {
                     "root" -> {
-                        // Top-level nodes are the three sections
                         val items = listOf(
                             MediaItem.Builder()
                                 .setMediaId("continue_listening")
@@ -269,24 +273,27 @@ class AudiobookPlaybackService : MediaSessionService() {
                         LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
                     }
                     "continue_listening" -> {
-                        val items = repository.getContinueListeningSync().map { entity ->
-                            bookToMediaItem(entity)
-                        }
-                        LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
+                        val items = repository.getContinueListeningEntities()
+                        LibraryResult.ofItemList(
+                            ImmutableList.copyOf(items.map { continueItemToMediaItem(it) }),
+                            params
+                        )
                     }
                     "recently_added" -> {
-                        val items = repository.getRecentlyAddedRecent().map { entity ->
-                            bookToMediaItem(entity)
-                        }
-                        LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
+                        val items = repository.getRecentlyAddedCached()
+                        LibraryResult.ofItemList(
+                            ImmutableList.copyOf(items.map { bookToMediaItem(it) }),
+                            params
+                        )
                     }
                     "library" -> {
-                        val items = repository.getAllBooks().map { entity ->
-                            bookToMediaItem(entity)
-                        }
-                        LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
+                        val items = repository.getAllCachedBooks()
+                        LibraryResult.ofItemList(
+                            ImmutableList.copyOf(items.map { bookToMediaItem(it) }),
+                            params
+                        )
                     }
-                    else -> LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN)
+                    else -> LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
                 }
             }
         }
@@ -301,7 +308,7 @@ class AudiobookPlaybackService : MediaSessionService() {
                 if (entity != null) {
                     LibraryResult.ofItem(bookToMediaItem(entity), null)
                 } else {
-                    LibraryResult.ofError(LibraryResult.RESULT_ERROR_UNKNOWN)
+                    LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
                 }
             }
         }
@@ -310,14 +317,11 @@ class AudiobookPlaybackService : MediaSessionService() {
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
             query: String,
-            params: LibraryParams?
+            params: MediaLibraryService.LibraryParams?
         ): ListenableFuture<LibraryResult<Void>> {
             return guavaFuture {
-                val results = repository.searchLibraryForAuto(query)
-                val items = results.map { bookToMediaItem(it) }
-                session.notifySearchResultChanged(
-                    browser, query, items.size, params
-                )
+                val items = repository.searchLibraryForAuto(query)
+                session.notifySearchResultChanged(browser, query, items.size, params)
                 LibraryResult.ofVoid()
             }
         }
@@ -328,17 +332,51 @@ class AudiobookPlaybackService : MediaSessionService() {
             query: String,
             page: Int,
             pageSize: Int,
-            params: LibraryParams?
+            params: MediaLibraryService.LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             return guavaFuture {
-                val results = repository.searchLibraryForAuto(query)
-                val items = results.map { bookToMediaItem(it) }
-                LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
+                val items = repository.searchLibraryForAuto(query)
+                LibraryResult.ofItemList(
+                    ImmutableList.copyOf(items.map { bookToMediaItem(it) }),
+                    params
+                )
             }
         }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    /**
+     * Helper for building a playable MediaItem from a ContinueListeningItem.
+     */
+    private fun continueItemToMediaItem(item: com.plexaudiobooks.data.local.ContinueListeningItem): MediaItem {
+        val thumbUrl = session.buildThumbUrl(item.thumbPath)
+        val extras = Bundle().apply {
+            putString(X_RATING_KEY, item.ratingKey)
+            putString(X_TIMELINE_KEY, item.ratingKey)
+            putString(X_TITLE, item.title)
+            putString(X_AUTHOR, item.author)
+            putString(X_THUMB_URL, thumbUrl)
+            // ContinueListeningItem doesn't carry all part keys, but we handle it gracefully or resolveThinItem reads from room
+            putString(X_PART_KEYS, "")
+            putLong(X_DURATION_MS, item.durationMs)
+        }
+
+        val meta = MediaMetadata.Builder()
+            .setTitle(item.title)
+            .setArtist(item.author)
+            .setAlbumTitle(item.title)
+            .setExtras(extras)
+            .apply { thumbUrl?.let { setArtworkUri(Uri.parse(it)) } }
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .build()
+
+        return MediaItem.Builder()
+            .setMediaId(item.ratingKey)
+            .setMediaMetadata(meta)
+            .build()
+    }
 
     /**
      * Helper for building a playable MediaItem from a cached library entity.
