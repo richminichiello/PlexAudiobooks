@@ -1,6 +1,9 @@
 # PlexAudiobooks — Developer Handoff
 
-**Version:** 1.6.5 (versionCode 45)
+**Version:** 1.8.10 (versionCode 57) — **STABLE / PRODUCTION-READY.** Chapter-clip Media3 architecture fully shipped: playlist-of-chapter-clips, two-phase `play()` with local Room caches (DB v5), on-device smoke tests ALL PASS (2026-09-02). All known playback bugs fixed.
+
+> **STATUS (2026-08-17):** Both sides of the Media3 migration (Service + PlaybackManager) are Media3 in the source tree AND **COMPILE + PACKAGE** (`:app:assembleDebug` succeeded; APK at `app/build/outputs/apk/debug/PlexAudiobooks-1.7.0-debug.apk`). The **Media3 `MediaSession` is built on the RAW ExoPlayer** — book-absolute position/duration everywhere (one coordinate system; the `ChapterAwarePlayer` `ForwardingPlayer` wrapper that made the notification chapter-relative was DELETED after a smoke test found its chapter-rel↔book-abs drift broke resume/15s-30s/chapter-list/chapter-skip). `PlaybackManager` is a Media3 `MediaController` + `SessionToken` (controller-driven `setMediaItem`/`prepare`/`play`; `Player.Listener` for playback events; `updateStateFromController` reads book-absolute `controller.currentPosition` directly — no re-anchoring). All seeks (resume, seekbar, chapter-list tap, 15s/30s, next/previous chapter) are the same book-absolute `controller.seekTo(bookAbs)`; chapter skip is computed off `state.currentChapterIndex`/`positionMs` (NOT `controller.seekToNext`, which no-ops on the single-item ExoPlayer). The notification seek bar is now **book-level, not per-chapter** (accepted regression; the in-app sheet keeps chapter-relative display). The dead `ACTION_PLAY`/`EXTRA_*` constants and `sendPlayIntent` are deleted; `MainActivity` no longer builds a start Intent. The gradle wrapper EXISTS (`gradlew`/`gradlew.bat`/`gradle-wrapper.jar`, 8.10.2). To rebuild: `JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew --console=plain --no-daemon :app:assembleDebug` (bash `./gradlew`; `cmd.exe /c gradlew.bat …` swallows output). Build warnings only: `onUpdateNotification(MediaSession)` deprecated-in-Java (deliberate — keep), `debounce` wants `@OptIn(FlowPreview)` (1.6.4 pre-existing). **REMAINING = ON-DEVICE SMOKE TEST** (see the risk flags in memory `media3-chapterawareplayer-removed.md`). See the "1.7.0 Media3 Migration" + "Build" sections below.
+
 **Language:** Kotlin
 **Min SDK:** 26 | **Target SDK:** 35 | **Compile SDK:** 35
 
@@ -14,19 +17,19 @@ Native Android audiobook player for Plex Media Server. Authenticates via Plex OA
 
 ## Tech Stack
 
-| Layer | Library |
-|-------|---------|
-| UI | MVVM, ViewBinding, Navigation Component (Safe Args) |
-| DI | Hilt 2.52 |
-| DB | Room 2.6.1 (version 2, one migration applied) |
-| Network | Retrofit 2.11.0 + Gson + OkHttp 4.12.0 |
-| Playback | ExoPlayer (Media3 1.5.0) |
-| Media Session | `androidx.media:media:1.7.0` — MediaBrowserServiceCompat + MediaSessionCompat |
-| Paging | Paging3 3.3.5 |
-| Images | Glide 4.16.0 |
-| Auth storage | EncryptedSharedPreferences |
-| Background work | WorkManager 2.10.0 (Hilt-integrated) |
-| Async | Coroutines 1.9.0 + Flow |
+| Layer           | Library                                                                                                                                              |
+|-----------------|------------------------------------------------------------------------------------------------------------------------------------------------------|
+| UI              | MVVM, ViewBinding, Navigation Component (Safe Args)                                                                                                  |
+| DI              | Hilt 2.52                                                                                                                                            |
+| DB              | Room 2.6.1 (version 2, one migration applied)                                                                                                        |
+| Network         | Retrofit 2.11.0 + Gson + OkHttp 4.12.0                                                                                                               |
+| Playback        | ExoPlayer (Media3 1.5.0)                                                                                                                             |
+| Media Session   | Media3 1.5.0 — `MediaSessionService` + `MediaSession` built on the raw ExoPlayer (book-absolute position/duration; book-level notification seek bar) |
+| Paging          | Paging3 3.3.5                                                                                                                                        |
+| Images          | Glide 4.16.0                                                                                                                                         |
+| Auth storage    | EncryptedSharedPreferences                                                                                                                           |
+| Background work | WorkManager 2.10.0 (Hilt-integrated)                                                                                                                 |
+| Async           | Coroutines 1.9.0 + Flow                                                                                                                              |
 
 ---
 
@@ -67,23 +70,22 @@ com.plexaudiobooks/
 
 ## Room Database
 
-**Version 4.** Migrations: 1→2 adds `completed` to `cached_library`; 2→3 adds `shelved` to `cached_library`; 3→4 adds `durable INTEGER NOT NULL DEFAULT 0` to `downloaded_books` (distinguishes an explicit full-book download from a read-ahead cache file — see Offline Caching).
+**Version 5.** Migrations: 1→2 adds `completed` to `cached_library`; 2→3 adds `shelved`; 3→4 adds `durable` to `downloaded_books`; **4→5 adds `cached_chapters` + `book_detail_cache`** (the chapter/detail local caches — see Two-Phase Play below).
 
 ### Tables
 | Table | Entity | Purpose |
 |-------|--------|---------|
 | `playback_progress` | `PlaybackProgressEntity` | Local resume position; synced to Plex |
-| `downloaded_books` | `DownloadedBookEntity` | Tracks local file path, size, `downloadedUpToMs`, and `durable` (true = explicit full-book download that persists across completion; false = read-ahead cache that auto-deletes on completion) |
-| `cached_library` | `CachedLibraryEntity` | Library snapshot; includes `completed` flag |
+| `downloaded_books` | `DownloadedBookEntity` | Local file path, `downloadedUpToMs`, `durable` flag |
+| `cached_library` | `CachedLibraryEntity` | Library snapshot; `completed` + `shelved` flags |
+| `cached_chapters` | `CachedChapterEntity` | **NEW (v5)** — per-book chapter list, write-once-read-forever |
+| `book_detail_cache` | `BookDetailCacheEntity` | **NEW (v5)** — per-book stream part key, track ratingKey, duration, thumb path |
 
-### Key Queries (Daos.kt)
-- `CachedLibraryPagingDao`: paged queries by title/author/duration/added — **all queries include `WHERE completed = 0 OR completed IS NULL`** so completed books never appear in the main grid
-- `getPagedExcludeCompleted()`: used when hide-completed toggle is on (redundant with above but kept for explicit intent)
-- `getContinueListening()`: JOIN with `playback_progress` using `CAST(ratingKey AS TEXT)` on both sides to prevent silent type mismatches; excludes completed books; no upper-bound position filter (avoids falsely excluding books near the end)
-- `getCompleted()`: returns `Flow<List<CachedLibraryEntity>>` where `completed = 1`
-- `getCompletedKeys()`: returns `List<String>` of completed ratingKeys — used by `fetchLibrary` to preserve completed state across cache refreshes
-- `getDownloadedKeys()`: returns `Flow<List<String>>` of downloaded ratingKeys for offline badge
-- `setCompleted(ratingKey, completed)`: updates the `completed` column
+### Why the two new tables exist (the "why" for P1)
+
+**`cached_chapters`**: Chapters are immutable per book — they never change once the M4B is on the server. Previously they were re-fetched from the server on EVERY `play()` via a 3-call chain (album → children → per-track `includeChapters=1`), making "continue book" slow and the chapter list appear/disappear depending on network health. Now: first `fetchBookDetail()` writes the rows; every subsequent `play()` reads them from Room instantly. The chapter list is stable regardless of connectivity.
+
+**`book_detail_cache`**: The stream part key (`mediaKey`), full part-key list, track ratingKey (for `/:/timeline`), and true summed duration are NOT in `cached_library` (album rows have no parts). They're only known after `fetchBookDetail()`. This table caches them separately from `cached_library` — which gets **wiped and rebuilt on every library refresh** — so playback detail survives. Streaming books resume instantly after the first play because the stream URL comes from this cache, not the network.
 
 ---
 
@@ -113,54 +115,27 @@ com.plexaudiobooks/
 
 ---
 
-## Playback Architecture
+## Playback Architecture (1.8.x — chapter-clip playlist)
 
-**Service:** `AudiobookPlaybackService extends MediaBrowserServiceCompat`
-**NOT** Media3 `MediaSessionService` — that API does not allow overriding `PlaybackState.position`, making chapter-relative progress impossible in notifications and car displays.
+**Core design shift in 1.8.0:** the old "one ExoPlayer playing the whole book" model is replaced by a **playlist of per-chapter MediaItems**. Each `MediaItem` in the playlist is a thin `ClippingConfiguration` scoped to one chapter's `[startMs, endMs]` on the same underlying stream/file URI. The raw ExoPlayer inside `AudiobookPlaybackService` therefore sees each chapter as its own item — the notification subtitle and lock-screen seekbar are natively chapter-relative (no wrapper, no manual position math on the playback thread).
 
-### Seek Contract (critical — has caused many bugs)
-All seek paths use **chapter-relative positions** into `onSeekTo`:
+**Book-absolute position** (needed for Room progress + `/:/timeline` sync + read-ahead targeting) is reconstructed at read time: `chapters[exoPlayer.currentMediaItemIndex].startMs + exoPlayer.currentPosition`. This is the single translation point in the whole app. Every consumer of `state.positionMs` sees book-absolute; every consumer of the notification/chapter list sees chapter-relative. Degraded mode (no chapter data) is a single-item playlist spanning the whole book — structurally identical to plain continuous playback.
 
-| Source | What it sends | Service does |
-|--------|---------------|--------------|
-| Notification bar drag | chapter-relative (0..chapterDuration) | `+ chapter.startMs` → absolute |
-| In-app seekbar / skip buttons | `PlaybackManager.seekAbsolute(abs)` subtracts `chapter.startMs` → chapter-rel | `+ chapter.startMs` → absolute |
-| Chapter list tap | `PlaybackManager.seekAbsolute(chapter.startMs)` (PlayerSheetFragment) | service `onSeekTo` receives chapter-rel → `+ chapter.startMs` → absolute |
+**Seek contract:** ALL seek paths (resume, seekbar, 15s/30s, next/previous chapter, chapter list tap) use `controller.seekTo(chapterIndex, chapterRelativeMs)` on the raw controller, or `seekToNext()/seekToPrevious()` (which NO-OP on a single-item playlist — hence the explicit chapter-index computation in `PlaybackManager`). See `PlaybackManager.seekAbsolute()`, `nextChapter()`, `previousChapter()`.
 
-`PlaybackStateCompat.position` = chapter-relative (what notifications use)
-`PlaybackState.extras[EXTRA_ABSOLUTE_POSITION]` = raw ExoPlayer position (`PlaybackManager` reads it for all calculations; the sheet derives its chapter-relative seekbar from it)
+**Chapter loading (1.8.1 — companion object REMOVED):** the old `pendingChapters` in-process relay is gone. `AudiobookPlaybackService.loadChaptersIfNeeded()` reads from Room (`repository.getCachedChapters()`) once per session, called from `onAddMediaItems()` (first chance) and again from `STATE_READY` (back-stop). This decouples the service from the manager process — if the service restarts alone (system-initiated after process death), chapters are still available.
 
-### Chapter Loading
-- Chapters sent via `AudiobookPlaybackService.pendingChapters` (companion object, in-process)
-- `startStateUpdating()` loop polls `pendingChapters` every 500ms — picks up chapters whenever they arrive
-- On chapter change: `updateSessionMetadata()` sets `METADATA_KEY_DURATION` = chapter duration, `METADATA_KEY_TITLE` = chapter title
+**Progress reporting:** `saveProgress()` every 10s writes Room + `GET /:/timeline` with `hasMDE=1`. Book-absolute position derived as described above. Duration falls back to `currentChapters.last().endMs` when `exoPlayer.duration` is -1 (common before full buffer).
 
-### Progress Reporting
-- Local save: `repository.saveProgress()` → `playback_progress` table every 10s
-- Plex sync: `GET /:/timeline` with `hasMDE=1` — **not** `/:/progress` (deprecated)
-- **Timeline keys off the TRACK ratingKey, not the album ratingKey and not a part key.** `PlaybackManager.play()` passes `AudioBook.trackRatingKey` (populated only by `fetchBookDetail` — neither the `cached_library` row nor the `downloaded_books` row carries it) into `EXTRA_KEY` → the service's `currentKey` → `reportProgressToPlex()`, falling back to the album ratingKey when there are no track children. `reportProgressToPlex()` always builds `key=/library/metadata/{ratingKey}` itself (stripping any existing `/library/metadata/` prefix) — do NOT reintroduce the old `if (key.startsWith("/library"))` heuristic that passed a `/library/parts/…` part key through unchanged, which silently dropped every progress report (the 1.6.5 regression — see Resolved in 1.6.5). The local Room save stays keyed by the ALBUM ratingKey (`currentRatingKey`) so Continue Listening's JOIN still matches.
-- Always uses absolute ExoPlayer position, never chapter-relative
-- `saveProgress()` falls back to `currentChapters.last().endMs` for duration when `exoPlayer.duration` returns `-1` (common before full buffer); skips save if position is 0
-- **Auto-complete-on-save: NOT CURRENTLY WIRED.** The doc previously claimed `saveProgress()` silently marked the book complete when within `autoCompleteMinutes` of the end. That threshold check does not exist in `AudiobookPlaybackService.saveProgress()` (`:680-696`) — `autoCompleteMinutes` (`SessionManager.kt:254`) is defined but read nowhere. Today a book only gets the `completed` flag via natural `STATE_ENDED` or manual "Mark as Read". Tracked as a pre-1.6.0 gap — deferred until the re-arch is stable.
-- **Natural completion**: when `Player.STATE_ENDED` fires and it is a genuine book end (not a truncated local file), the book is marked complete, a non-durable cache file is auto-evicted (durable downloads spared), and the service stops via the shared `stopPlaybackAndService()` helper (see below). Do NOT tear playback down inline inside the ExoPlayer listener — the old real-end branch did that with no `exoPlayer.stop()` and no `stopSelf()`, leaving the service without a foreground notification so Android 12+ killed it mid-callback → the app disappeared at end of book (and was likely the replay-of-completed-book crash too).
+**End-of-book:** `STATE_ENDED` fires only when the **final** chapter clip finishes (Media3 auto-advances between chapters — no truncated-file disambiguation needed anymore). On end: saveProgress → markCompleted → evict non-durable cache → `stopPlaybackAndService()`.
 
-### End-of-Book Workflow (critical)
-When `Player.STATE_ENDED` fires, the service checks whether this is a real book end or a truncated local file end. The branch is gated on **`currentSourceIsLocal`** (a service field set in `playBook()` from `streamUrl.startsWith("file://")`, reset on book switch) — robust because `exoPlayer.currentMediaItem` can be null/stale across the `setMediaItem` transition mid-callback:
-- If `currentSourceIsLocal` AND `download.downloadedUpToMs < download.durationMs` AND `pos < durationMs - 10_000`: **local file is truncated** — switch to streaming from server and continue playback from current position; immediately set `currentSourceIsLocal = false` so the *next* `STATE_ENDED` (from the just-switched server stream) routes to real-end instead of looping back into this branch
-- Otherwise (a server stream that ended, or a fully-cached local file that played to the end): genuine end — save progress, mark complete, **auto-evict a non-durable cache** (`if (download?.durable != true) repository.deleteDownloadAndFile(ratingKey)` — covers `download == null` and non-durable rows; a durable full-book download is spared and stays on disk until the user explicitly removes it), reset position to 0, then stop the service via the shared `stopPlaybackAndService()` helper.
+**Phone call:** pauses on `AUDIOFOCUS_LOSS`, resumes on `AUDIOFOCUS_GAIN`. The `pausedForFocusLoss` flag is reset ONLY when `chapterIndex == 0` (fresh play session) — never on subsequent item resolutions, so a mid-call playlist rebuild doesn't clear the flag.
 
-**`stopPlaybackAndService()` (added in 1.6.4 to fix the completion-crash found in 1.6.3 testing):** the single service teardown path — cancels `stateUpdateJob`/`progressJob`, `abandonAudioFocus()`, `exoPlayer.stop()`, `stopForeground(STOP_FOREGROUND_REMOVE)`, `stopSelf()`. Called from BOTH the real-end branch above AND `MediaSession.Callback.onStop()` so teardown happens exactly once and the service actually stops. The old real-end branch did a subset of this *inline inside the `onPlaybackStateChanged` ExoPlayer listener* — with `exoPlayer.stop()` and `stopSelf()` missing. That left the service stripped of its foreground notification (but not stopped) while a suspend `deleteDownloadAndFile` interleaved mid-callback, so on Android 12+ the system killed the un-foregrounded service within seconds → the app "just disappeared" at end of book (no crash dialog), streaming books worst because the file delete ran there. Routing through `stopPlaybackAndService()` stops ExoPlayer on the main thread (the real-end branch runs on `serviceScope = Dispatchers.Main`) and actually stops the service. **Do not reintroduce inline teardown in the real-end branch; do not call `stopSelf()`/`stopForeground()` from there directly — go through the helper.** This is almost certainly the same defect as Open Issue #1 (replay-of-completed-book `ForegroundServiceStartNotAllowedException`) — both reached the same half-stopped state; verify by replaying a completed book and watching logcat for the exception.
+### ForegroundServiceStartNotAllowedException (Android 12+, pre-existing mitigation)
+`safeStartForeground()` wraps `startForeground()` in try/catch at all three call sites (`onPlay`, `playBook`, `onIsPlayingChanged`) — logs instead of crashing when the app is background-restricted. **Do not remove.**
 
-**Why the `currentSourceIsLocal` gate (fixed 1.6.3):** before this, the truncated-file branch was gated only on the existence of a partial read-ahead `download` row (which a *streamed* book also has, because `triggerReadAheadIfNeeded` runs on every play including streams). A genuine server-stream `STATE_ENDED` reported `pos` slightly short of `duration` (ExoPlayer's last buffered position), so the OLD guard `pos < durationMs - 10_000` was true → the code misclassified the real end as a truncated local file, switched to the *same* server stream, and `return@launch` — never marking complete, never evicting, looping forever near the end. That's why streaming a book to the end left the read-ahead cache on disk.
-
-**Manual "Mark as Read"** (`LibraryViewModel.markCompleted`) is the other completion path: it calls `repository.setCompleted(ratingKey, true)`, then evicts a non-durable cache the same way. Marking a book **unread** (`completed = false`) deletes nothing — undo must not free a downloaded book.
-
-`repository.deleteDownloadAndFile(ratingKey)` is the centralized correct delete: removes the on-disk file (if present) AND the `downloaded_books` row. The old `repository.deleteDownload(ratingKey)` removed only the DB row and orphaned the file — all explicit delete paths (Detail "Remove download", Downloads trash button) now use `deleteDownloadAndFile`.
-
-When replaying a completed book, `PlaybackManager.play()` (`PlaybackManager.kt:151`) checks `cached.completed` and resets the start position to `0L` when `rawPosition >= bookDuration - 30_000` (i.e. the saved position is near the end), then calls `repository.setCompleted(ratingKey, false)` so the book returns to Continue Listening. This prevents a crash caused by ExoPlayer trying to seek to a near-end position on a fresh stream load. (This logic moved from the deleted `PlayerViewModel.loadBook()` into `PlaybackManager` during the 1.6.0 re-arch.)
-
-### ForegroundServiceStartNotAllowedException (Android 12+)
-A background start on Android 12+ throws `ForegroundServiceStartNotAllowedException`. **All three call sites** that can reach a foreground start — `onPlay` (`:223`), `playBook` (`:327`), and `onIsPlayingChanged` (`:474`) — now route through `safeStartForeground()` (`:608-614`), which wraps `startForegroundNotification()` in a try/catch so a background-restricted start logs a warning instead of crashing the service (the "playback dies, can't restart without force-quit" symptom). The notification reappears next time the app is foregrounded. **Do not remove `safeStartForeground()`.**
+### stopPlaybackAndService() (1.6.4, still critical)
+Single teardown path: cancel jobs → `abandonAudioFocus()` → `exoPlayer.stop()` → `stopForeground(REMOVE)` → `stopSelf()`. Called from both natural end-of-book and `MediaSession.Callback.onStop()`. **Never tear down inline in the ExoPlayer listener.**
 
 ---
 
@@ -170,11 +145,11 @@ A background start on Android 12+ throws `ForegroundServiceStartNotAllowedExcept
 The app maintains a local audio file for each book that covers a window of audio ahead of the current playback position. The window size is controlled by `SessionManager.downloadHours` (default `4`, hardcoded in `SessionManager.kt:147`; the Settings picker offers `1, 2, 3, 4, 6, 8` hours — note 5 and 7 are absent from the picker).
 
 ### How It Works
-1. **On every play** (first and subsequent): `triggerReadAheadIfNeeded()` (`AudiobookPlaybackService.kt:700-729`), invoked from `onStartCommand()`, computes `targetCachedUpToMs = (exoPlayer.currentPosition + downloadHours * 3600 * 1000L).coerceAtMost(durationMs)`. If a download already exists and `downloadedUpToMs >= targetCachedUpToMs` (the window still covers the playhead), it does nothing. Otherwise it enqueues `BookDownloadWorker.buildRequest(...)` with that target — so the "first play" (no existing download) and "subsequent play" (existing download, user has listened forward) are the same unified path, differing only in whether the skip-guard fires.
+1. **On every play** (first and subsequent): `triggerReadAheadIfNeeded()` is called once per session from `STATE_READY` (not `onStartCommand`). It computes `targetCachedUpToMs = (bookAbsPositionMs + downloadHours * 3600 * 1000L).coerceAtMost(durationMs)`. If the existing `download.downloadedUpToMs >= targetCachedUpToMs` (window already covers the playhead), it skips. Otherwise it enqueues `BookDownloadWorker.buildRequest(...)` with that target.
 2. **Worker extend path** (single-file books only — `partKeys.size == 1 && existingDownload != null && file exists`): `BookDownloadWorker` sends a `Range: bytes=N-` HTTP request to Plex to fetch only the missing bytes, appends them to the existing file, updates `downloadedUpToMs` in the DB.
-3. **Worker fresh path** (multi-part books, or no existing file): computes `maxBytes` from `desiredMs`, where `desiredMs` is `targetCachedUpToMs` **only if `> 0`**; if `targetCachedUpToMs == 0` it falls back to `downloadHours * 3600 * 1000L` from byte 0. (This is why the Detail-button passing `0` behaves like a read-ahead rather than a full download.)
-4. **Offline playback**: `PlaybackManager.buildStreamUrl()` (`PlaybackManager.kt:275`) returns a `file://` path only when the resume position is within the cached window: `safeLocal = (cachedUpTo <= 0 && positionMs == 0L) || (cachedUpTo > 0 && positionMs <= cachedUpTo)`. When `downloadedUpToMs` is unknown/`0`, the local file is used only from the very start; otherwise it streams so ExoPlayer doesn't seek past the end of a truncated local file. Falls back to the server stream URL otherwise. (This logic moved from the deleted `PlayerViewModel.buildStreamUrl()` into `PlaybackManager` during the 1.6.0 re-arch; `PlayerViewModel` no longer exists.)
-5. **WorkManager network constraint**: `setRequiredNetworkType(NetworkType.CONNECTED)` is set on every `buildRequest()` (including extend jobs, which reuse `buildRequest`) — jobs queue silently when offline and fire automatically on reconnect.
+3. **Worker fresh path** (multi-part books, or no existing file): computes `maxBytes` from `desiredMs`, where `desiredMs` is `targetCachedUpToMs` **only if `> 0`**; if `targetCachedUpToMs == 0` it falls back to `downloadHours * 3600 * 1000L` from byte 0.
+4. **Offline playback**: `PlaybackManager.buildStreamUrl()` returns a `file://` path when the resume position is within the cached window: `safeLocal = cachedUpTo <= 0 && positionMs == 0L || cachedUpTo > 0 && positionMs <= cachedUpTo`. When `downloadedUpToMs` is `0`/unknown, the local file is used only from position 0; otherwise it streams so ExoPlayer never seeks past the end of a truncated local file.
+5. **WorkManager network constraint**: `setRequiredNetworkType(NetworkType.CONNECTED)` on every `buildRequest()` — extend jobs queue silently when offline and fire on reconnect.
 
 ### Range Request Fallback
 If the server returns `200` instead of `206 Partial Content` for the Range request, the extend is skipped safely — no data corruption, existing cache preserved. A warning is logged: `"Server returned N instead of 206 — Range not supported. Keeping existing cache."`
@@ -196,16 +171,26 @@ The Download button in `DetailFragment` → `DetailViewModel.startDownload()` ca
 
 ---
 
-## Now Playing Load Sequence (1.6.0)
+## Now Playing Load Sequence (1.8.x — two-phase play)
 
-The player is no longer a fragment with its own load lifecycle. `PlaybackManager.play()` (the single entry point called by Continue Listening, Detail, and Downloads) does a staged load and emits `NowPlayingUiState`; the mini-player and `PlayerSheetFragment` collect `PlaybackManager.state: StateFlow<NowPlayingUiState>`.
+`PlaybackManager.play()` (single entry point for Continue Listening, Detail, Downloads) follows a two-phase pattern:
 
-1. **Instant (Room only)**: `play()` reads `repository.getCachedBook()`, `getDownload()`, and `getProgress()` — all local, no network. Builds an `AudioBook` for the UI and emits `_state` with `book` + `positionMs` populated and `chapters = emptyList()`. Cover art (already in Glide's disk cache from the library screen) renders immediately.
-2. **Network (if reachable)**: `play()` calls `repository.fetchBookDetail()` to fetch chapters (skipped on failure for a downloaded book — offline is fine). Pushes them to `AudiobookPlaybackService.pendingChapters` (in-process companion), which the service's `startStateUpdating()` loop picks up whenever they arrive. Emits the full state with `chapters`.
-3. **Position polling**: `PlaybackManager.pollPosition()` ticks every 500ms reading `EXTRA_ABSOLUTE_POSITION` from the controller's `PlaybackState` extras, re-deriving the chapter index/duration. The chapter-relative seekbar in `PlayerSheetFragment` (driven by `currentChapter()` lookup against `positionMs`) is only meaningful once `chapters.isNotEmpty()` — so the sheet's `render()` falls back to a book-level seekbar (book-duration-relative, 0–1000) when there's no chapter data, preventing the book-level seekbar flash.
+**Phase 1 — Instant local start (fast path):**
+1. Read Room in order: `detailCache` (book_detail_cache) → `download` (downloaded_books) → `cached` (cached_library) → merged into a display `AudioBook`
+2. Chapters read from Room (`cached_chapters`) — no network call needed
+3. `resolveAndRefreshServerUrl()` only fires if this is a **streaming** book AND we have no stored `serverUrl` — a background refresh, never blocking
+4. `_state` emitted with full data → mini-player shows cover art immediately (from Glide disk cache or cached thumbPath)
+5. `setMediaItems()` + `controller.prepare()` + `controller.play()` — audio starts within one frame
 
-### Error Handling on No Connectivity
-If `repository.resolveAndRefreshServerUrl()` throws, `play()` writes `state.error = "Cannot reach server: ..."` and aborts (no stream URL built). If `fetchBookDetail()` fails for a downloaded book, chapters stay empty and playback proceeds from the local file — the previously-rendered cover/position (if any) are preserved because `play()` does `_state.value.copy(...)` rather than a full state replace.
+**Phase 2 — Background enrichment (after `setMediaItems` fires):**
+6. `fetchBookDetail()` runs in a background coroutine to refresh `cached_chapters` and `book_detail_cache` (Room auto-persists; no UI action needed)
+7. If the chapter list we started with was empty and the fetch returns chapters, `launchEnrichment()` hot-swaps the playlist at the current position so the chapter list appears without restarting audio
+
+**When the fallback kicks in:** if `detailCache` is missing AND the book is not downloaded (no local file) AND there's no stored `serverUrl` — the first-ever play of a book — we fall back to the old behavior (`fetchBookDetail` synchronously before start). The next play of that book hits the fast path.
+
+**Mini-player stability (1.8.1):** MainActivity holds `lastDisplayBook` across `state.book == null` gaps so the bar never collapses between sheet dismissal and book switch; Glide reloads cover art only when `book.ratingKey` changes.
+
+**PlayerSheetFragment:** reads `state.chapters` directly. `state.book != null` triggers immediate render; `binding.loadingGroup` clears when `state.book` arrives. Chapter list is always populated once chapters are in Room.
 
 ---
 
@@ -283,8 +268,8 @@ override fun getSpanSize(position: Int): Int {
 - **Replay completed book**: resets position to 0 so replaying a completed book starts from the beginning without crashing
 - **Offline badge**: amber "OFFLINE" tag on book cards when downloaded; updates reactively via `collect`
 - **Book detail**: chapter list, download button with circular progress indicator, play button
-- **Playback**: M4B chapter extraction (`includeChapters=1` per track), chapter navigation, variable speed (0.5–2.0×), skip forward/back (configurable), chapter-relative seekbar
-- **Notification + car display**: chapter-relative progress bar and chapter title via `PlaybackStateCompat`
+- **Playback**: M4B chapter extraction (`includeChapters=1` per track), chapter navigation, variable speed (0.5–2.0×), skip forward/back (configurable). The in-app player sheet seekbar is chapter-relative (derived locally from book-absolute `positionMs` + the chapter list); the system notification seek bar is book-level (1.7.0-final: the chapter-relative `ChapterAwarePlayer` wrapper was removed for stability).
+- **Notification + car display**: book-level progress bar + book title (Media3 MediaStyle on the raw ExoPlayer). The chapter title shows only in the in-app sheet.
 - **Audio focus**: pauses on phone call/nav, resumes on focus regain; `ForegroundServiceStartNotAllowedException` caught safely on Android 12+
 - **Plex progress sync**: `/:/timeline` with `hasMDE=1`, resumes from server after reinstall
 - **Sliding read-ahead cache**: configurable hours (default 4; Settings picker offers 1/2/3/4/6/8), extends automatically as user progresses, uses HTTP Range requests to append only missing bytes, WorkManager queues extend jobs offline and fires on reconnect
@@ -293,6 +278,60 @@ override fun getSpanSize(position: Int): Int {
 - **Now Playing fast load**: cover art renders immediately from Glide disk cache; chapter-relative seekbar waits for chapter data before showing
 - **Remote connection**: parallel server URL probing with fallback to relay
 - **Settings**: skip times, download hours, download location, storage display, clear cache, sort/view preferences, sign out
+
+---
+
+### 1.7.0 Media3 Migration (COMPLETE)
+All Media3 migration work is finished and verified on-device. The chapter-clip playlist architecture (playback as a list of chapter-clipped MediaItems) is now the production path. The old `ChapterAwarePlayer` wrapper is gone. `:app:assembleDebug` builds cleanly.
+
+### 1.8.x Chapter Caching & Two-Phase Play (COMPLETE — 1.8.10 / code 57)
+**Goal:** Playing a book (especially a resumed book) should start in <1s with no network dependency, using locally cached chapters and stream URLs.
+
+**What was built:**
+- `cached_chapters` (Room v5): immutable per-book chapter list, written once on first `fetchBookDetail()` — read forever after from Room
+- `book_detail_cache` (Room v5): stream part key (`mediaPartKey`), full part-key list, track ratingKey (for `/:/timeline`), duration, thumb path — cached separately from `cached_library` because `fetchLibrary()` wipes that table on refresh
+- `PlaybackManager.play()` two-phase: **Phase 1** all local (Room), instant state emission + `setMediaItems` + `play()`; **Phase 2** background `fetchBookDetail()` refresh, hot-swaps chapters into the playlist if the cached copy was stale
+- `AudiobookPlaybackService.loadChaptersIfNeeded()`: reads chapters from Room (replaces the old `pendingChapters` companion object) — service no longer depends on in-process relay
+
+**Verified on-device:** book completion, replay-from-completed, seek/skip/chapter navigation, `/:/timeline` sync, read-ahead triggering, cover art stability, phone-call pause/resume, mini-player persistence.
+
+### Service side
+`AudiobookPlaybackService` is a **`MediaSessionService`** (Media3), not `MediaBrowserServiceCompat`. It builds `MediaSession.Builder(this, exoPlayer)` (the **RAW** ExoPlayer) with a `GlideBitmapLoader` (`BitmapLoader`) + `MediaSession.Callback`. Position/duration are **book-absolute** — the session reads the raw `exoPlayer.currentPosition`/`duration` polymorphically. (The earlier-draft `ChapterAwarePlayer` `ForwardingPlayer` that made the notification chapter-relative was DELETED — see the 1.7.0-final smoke-test fix below; the notification seek bar is now book-level.)
+
+**Start path = controller-driven.** `MainActivity` no longer calls `startPlayback()`. `PlaybackManager` (the controller) calls `controller.setMediaItem(thinItem)` + `prepare()` + `play()` over the Media3 session. `thinItem` is a `MediaItem` with `mediaId = ratingKey` and `mediaMetadata.extras` (a `Bundle`) carrying `X_RATING_KEY`/`X_STREAM_URL`/`X_TITLE`/`X_AUTHOR`/`X_THUMB_URL`/`X_START_POSITION_MS`/`X_SPEED`/`X_PART_KEYS`/`X_DURATION_MS`/`X_TIMELINE_KEY`. The service's `MediaSession.Callback.onAddMediaItems(controllerInfo, mediaItems)` resolves that thin item (no playable URI) into the real item (stream/file URI + display metadata). The manifest `<service>` intent-filter action is `androidx.media3.session.MediaSessionService`.
+
+**Start position is applied on the RAW exoPlayer in the first-READY handler** (`applyPendingStart` gate), read from `X_START_POSITION_MS` (book-absolute). We override `onAddMediaItems` (returns `List<MediaItem>`, no position semantics) rather than `onSetMediaItems`.
+
+**Audio focus** is the service's explicit job (`MediaSessionService` does NOT manage it): `requestAudioFocus()` is called in the first-READY `applyPendingStart` block. **No manual `stopForeground`/`STOP_FOREGROUND`** — `MediaSessionService` owns its own notification; `stopPlaybackAndService()` keeps `exoPlayer.stop()` + `stopSelf()` and drops the manual foreground calls. `GlideBitmapLoader` supplies Media3's `BitmapLoader`; cover art is resolved from `MediaItem.MediaMetadata.artworkUri`.
+
+**Chapter data:** `pendingChapters` (companion object) is drained once at play start by `loadPendingChapters()` into `currentChapters`; the service keeps it for `saveProgress`'s `currentChapters.last().endMs` duration fallback + `handleStateEnded`/read-ahead. The service does NOT track a chapter index or participate in seek/skip arbitration — that lives entirely in `PlaybackManager`.
+
+### `PlaybackManager`
+Media3 `MediaController` + `SessionToken`. The legacy `MediaBrowserCompat`/`MediaControllerCompat`/`transportControls` and the deleted `EXTRA_ABSOLUTE_POSITION` read are gone.
+- **Connection:** `MediaController.Builder(appContext, SessionToken(appContext, ComponentName(appContext, AudiobookPlaybackService))).setListener(MediaController.Listener).buildAsync()` → `ListenableFuture<MediaController>`. `ensureControllerAwaited()` is a hand-rolled `suspendCancellableCoroutine` + Guava `Futures.addCallback` await with an **inline `directExecutor`** (`java.util.concurrent.Executor { it.run() }`, NOT Guava's `MoreExecutors`; no `kotlinx-coroutines-guava` dep). The controller handoff (`addListener(playerListener)` + `pollPosition()` seed) runs on the MAIN thread. `release()` is single-path (`releaseFuture` if the future is around, else bare `controller.release()`).
+- **Callbacks:** `MediaController.Listener` (interface — `object : MediaController.Listener { }`, no constructor parens) carries session-level events only (`onDisconnected`/`onError`). Playback events come via a **`Player.Listener`** on the resolved controller (controller IS-A `Player`).
+- **`play()`** semantics preserved: resume prompt / un-complete-on-replay / un-shelve-on-play / `resolveAndRefreshServerUrl` / `buildStreamUrl` / `isStarting` feedback / `playJob` re-entrancy. The terminal `sendPlayIntent` is **replaced** by a **thin `MediaItem`** (`setMediaId(ratingKey)` + `MediaMetadata` with title/artist/albumTitle/subtitle/artworkUri + extras(Bundle) carrying the X_*), then `ctrl.setMediaItem` + `prepare()` + `play()`. `AudiobookPlaybackService.pendingChapters = finalChapters` is set first.
+- **Position contract (book-absolute):** `controller.currentPosition` IS book-absolute (session on raw ExoPlayer), so `updateStateFromController()` reads it directly into `state.positionMs` — no re-anchoring. `currentChapterIndex`/`chapterDurationMs` are derived from `absPos` + the chapter list purely to drive the in-app sheet's local chapter-relative seekbar + chapter-list highlight.
+- **Transport:** `togglePlayPause`→`controller.play()`/`pause()`; `seekAbsolute(abs)`→`controller.seekTo(abs.coerceIn(0, bookDurationMs))` (book-absolute, no relativization); `skipBy`→`seekAbsolute(positionMs + delta)`; `nextChapter`/`previousChapter`→ compute `chapters[idx±1].startMs` off `state.currentChapterIndex`/`positionMs` (previous chapter: >3s into current restarts it, else prior) and call `seekAbsolute(...)` — NOT `controller.seekToNext/Previous` (no-op on single-item ExoPlayer), NOT a service skip. `setSpeed`→`controller.setPlaybackSpeed`; `stop`→`controller.stop()`.
+- **`MainActivity`:** the dead `ACTION_PLAY`/`EXTRA_*` companion constants AND the now-unused `import android.content.Intent` are **deleted**. `stopPlaybackAndExit` = `playbackManager.stop()` + `finishAffinity()`.
+- **Deferred:** `androidx.media:media:1.7.0` (`app/build.gradle`) is now referenced only by comments — removable in a follow-up.
+
+### Build (wrapper GENERATED; **`:app:assembleDebug` BUILDS SUCCESSFULLY 2026-08-15 → `PlexAudiobooks-1.7.0-debug.apk`; remaining = on-device smoke test**)
+The repo NOW HAS `gradlew`/`gradlew.bat`/`gradle-wrapper.jar` (gradle 8.10.2) — committed by the `gradle wrapper` step on 2026-08-15, fixing the long-standing "no gradlew" gap. A normal build is:
+```
+JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew --console=plain --no-daemon :app:assembleDebug
+```
+Run via the bash `./gradlew` in the repo root — `cmd.exe /c "gradlew.bat …"` swallows the output and only prints the cmd banner. The JBR java is `C:\Program Files\Android\Android Studio\jbr\bin\java.exe` (JDK 17; gradle 8.10.2 needs 17+). If the wrapper is ever missing: download `gradle-8.10.2-bin.zip` (~130MB) to `C:\Temp\pa_gradle_dl` (`curl -L --max-time 540 -o … https://services.gradle.org/distributions/gradle-8.10.2-bin.zip`), unzip, `JAVA_HOME=… "C:\Temp\pa_gradle_dl\gradle-8.10.2\bin\gradle.bat" wrapper --gradle-version 8.10.2`. (No system/choco/scoop gradle exists; Android Studio ships only the Tooling API jars, not a runnable `gradle`.)
+
+**Build pass 1 (2026-08-15) FAILED in `:app:compileDebugKotlin` — 6 errors, all FIXED, awaiting pass 2:**
+1. `GlideBitmapLoader.kt` "Unclosed comment at EOF" — a `` `image/*` `` backticked code span inside a `/** */` KDoc. **Kotlin block comments nest and lex before markdown**, so the `/*` opened a nested comment; the KDoc's `*/` only closed the nested one, leaving `/**` unclosed. Fix: rephrased to drop the `/*` literal. **Codebase rule: never write a literal `/*` inside a KDoc, even backticked.** (This file was written in the prior session and never built — masked by the manager's `EXTRA_ABSOLUTE_POSITION` error.)
+2. `AudiobookPlaybackService.kt` `object : MediaSession.Callback() { }` — `MediaSession.Callback` is an **interface** (verified via `javap` on the media3-session 1.5.0 AAR), not a class. Fix: `object : MediaSession.Callback { }` (no constructor parens; `MediaController.Listener` is also an interface — same pattern).
+3. `AudiobookPlaybackService.kt` `onSkipToPrevious`/`onSkipToNext` "overrides nothing" — `MediaSession.Callback` has **no** skip hooks in Media3 1.5.0. Fix (at the time): moved chapter skip to `ChapterAwarePlayer` overrides (`seekToNext`/`seekToPrevious` + `getAvailableCommands` adding `COMMAND_SEEK_TO_NEXT/PREVIOUS`) delegating to service `seekToNextChapter`/`seekToPreviousChapter` (wired in `onCreate` via `setChapterNavigation`). **SUPERSEDED in 1.7.0-final:** `ChapterAwarePlayer` was deleted; chapter skip is now a plain book-absolute `controller.seekTo(chapter.startMs)` in `PlaybackManager` (no `seekToNext`/`seekToPrevious`, no service skip wiring).
+4. `PlaybackManager.kt` `this@ControllerManager.…` "Unresolved label" — the class is `PlaybackManager`. Fix: `this@PlaybackManager`.
+5. `PlaybackManager.kt` `ensureControllerAwaited` "Missing return statement" — bare trailing expression after a `withContext { return@withContext }` was ambiguous. Fix: `return withContext(Dispatchers.Main) { … }` yielding `null` (superseded) or `ctrl` (adopted).
+6. (Pre-emptive) `MoreExecutors.directExecutor()` → inline `directExecutor` field — removes a Guava class assumption; the build confirmed `Futures`/`ListenableFuture`/`FutureCallback` are all that's needed.
+
+Alternatively, open the project once in Android Studio (it auto-generates the wrapper if missing).
 
 ---
 
@@ -305,12 +344,13 @@ override fun getSpanSize(position: Int): Int {
 - **Durable downloads vs read-ahead cache split + auto-evict-on-complete (fixed 2026-08-05)**: previously a `downloaded_books` row could be either an explicit full-book download or an invisible read-ahead cache file, with no way to tell them apart — and completion freed neither. Now: a new `durable` column (DB v4, `MIGRATION_3_4`) marks explicit downloads. (1) The Detail "Download" button (`DetailViewModel.startDownload`) passes `targetCachedUpToMs = book.duration` + `durable = true` so it grabs the WHOLE book (closes old Known Issue #2 — it previously passed `0` and capped at `downloadHours`) and is spared from completion-eviction. (2) Both completion paths — `STATE_ENDED` real-end in `AudiobookPlaybackService` and manual "Mark as Read" in `LibraryViewModel.markCompleted` — auto-delete the file + row **iff `!durable`** via the new `repository.deleteDownloadAndFile(ratingKey)`. Durable downloads persist until the user explicitly removes them. Mark-as-unread deletes nothing. (3) The latent leak where `repository.deleteDownload()` deleted the DB row but orphaned the audio file is fixed: Detail "Remove download" and the Downloads trash button now call `deleteDownloadAndFile`. The extend path in `BookDownloadWorker` preserves `existing.durable || durable` so a durable download never silently downgrades to cache on a read-ahead extend. The offline badge / Downloads screen / `buildStreamUrl` are unchanged (a durable full-book download plays fully offline as before). DEFAULT 0 on the new column means every existing read-ahead row on disk stays cache after migration — correct, since none were durable before.
 
 ### Open
-1. **End-of-book crash when replaying completed book**: `ForegroundServiceStartNotAllowedException` crash still occurring in some scenarios when replaying a completed book. The 1.6.0 re-arch added `safeStartForeground()` at all three foreground call sites (`:223/:327/:474`) — this is the planned mitigation and may already resolve the replay case. **Update (1.6.3 testing):** the completion-teardown fix (`stopPlaybackAndService()` above) is almost certainly the same defect — the old real-end branch left the service half-stopped (no foreground notification, `STATE_ENDED` mid-callback), the same state a replay-of-completed-book would re-enter. Next step: replay a completed book and capture `adb logcat -v time com.plexaudiobooks:V AndroidRuntime:E *:S > crash_log.txt` (`adb` in `cmd.exe`, not PowerShell — see Coding Preferences). Review full output including lines before the fatal exception. If the crash no longer reproduces, close this issue.
+1. ~~End-of-book crash when replaying completed book~~ → **CLOSED (on-device verified, 1.8.7)**: The `stopPlaybackAndService()` helper eliminated the crash. Confirmed by replaying a completed book on-device.
 2. **Download notification**: no progress notification in the notification area during download (Stage 2, not yet done).
-3. **Auto-complete-on-save NOT wired (deferred)**: `autoCompleteMinutes` is stored in `SessionManager` but **the engine logic itself is not implemented** — `AudiobookPlaybackService.saveProgress()` (`:680-696`) does not call `setCompleted()` near the end; only natural `STATE_ENDED` does. So the Settings UI control is moot until the near-end auto-mark is actually written. Pre-1.6.0 gap; deferred until the re-arch is stable. (Was previously listed as "Auto-complete threshold UI not added" — that understated it.)
+3. **Auto-complete-on-save NOT wired (deferred)**: `autoCompleteMinutes` is stored in `SessionManager` but the engine logic is not implemented. `saveProgress()` only marks complete on natural `STATE_ENDED`. The Settings UI control is a no-op until implemented.
 4. **Login flow**: occasionally slow after OAuth; home user selection sometimes requires app restart (minor, deferred).
 5. **Completed section UX**: long-press to mark complete/unread is not immediately discoverable — consider swipe action or context menu in a future pass.
-6. **Settings "clear cache"** nukes the whole `downloads` dir indiscriminately (durable + cache together) and does not clear the `downloaded_books` DB table. Left as-is in 1.6.2; a future pass could make it delete only non-durable files + their rows.
+6. **Settings "clear cache"** nukes the whole `downloads` dir indiscriminately (durable + cache together) and does not clear the `downloaded_books` DB table.
+7. **Multi-file books read-ahead**: read-ahead extend (`Range: bytes=N-`) works only for single-file M4B books. Multi-file books fall back to full-file download from byte 0.
 
 ### Resolved in 1.6.3 (2026-08-05)
 - **Streamed-book read-ahead cache now evicted on completion** (#1): see End-of-Book Workflow above. Root cause was the truncated-file branch mistaking a genuine server-stream end for a truncated local-file end whenever a partial read-ahead row existed (which streams also have). Fixed by gating that branch on `currentSourceIsLocal` and hardening the eviction guard to `if (download?.durable != true)`.
@@ -338,12 +378,12 @@ Shipped after user testing of the 1.6.3 five fixes. Two remaining defects:
 - `withContext(Dispatchers.IO)` for all blocking work in repository
 - No `continue` inside `launch {}` lambdas — use `if` blocks instead (experimental feature in Kotlin)
 - `@HiltWorker` requires `PlexAudiobooksApp : Configuration.Provider` — do not revert
-- Never wrap a Paging3 `RecyclerView` inside `NestedScrollView` — causes memory exhaustion crash
-- `onSeekTo` in service always receives chapter-relative position — do not change to absolute without updating all seek paths
-- Use `collect` (not `collectLatest`) for flows where every emission must be processed (e.g. `downloadedKeys`, `continueListening`) — `collectLatest` cancels in-flight processing and can cause missed updates
-- Always use `CAST(ratingKey AS TEXT)` on both sides of Room JOIN queries — Plex ratingKeys look like integers but must be treated as strings throughout
-- `adb logcat` is run in Windows `cmd.exe`, not PowerShell — PowerShell command syntax does not work
-- The `BuildConfig` unresolved reference in `SettingsFragment.kt` is a cosmetic IDE error — builds succeed normally, ignore it
+- Never wrap a Paging3 `RecyclerView` inside `NestedScrollView` — memory exhaustion crash
+- Use `collect` (not `collectLatest`) for flows where every emission must be processed — `collectLatest` cancels in-flight work
+- Always `CAST(ratingKey AS TEXT)` on Room JOINs — Plex ratingKeys are strings
+- `adb logcat` via `cmd.exe`, not PowerShell
+- `BuildConfig` unresolved reference in SettingsFragment.kt is a known cosmetic IDE error — ignore
+- **Mini-player visibility is `state.hasContent` — do not gate on `book != null` alone**; the bar must survive during `isStarting` and after sheet dismissal
 
 ---
 

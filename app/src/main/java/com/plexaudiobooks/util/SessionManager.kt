@@ -40,6 +40,10 @@ class SessionManager @Inject constructor(
         private const val KEY_LIBRARY_VIEW_MODE  = "library_view_mode"   // "grid" or "list"
         private const val KEY_LIBRARY_SORT       = "library_sort"        // "title","author","duration","added"
         private const val KEY_HIDE_COMPLETED     = "hide_completed"
+        private const val KEY_CL_CONTINUE = "cl_continue"
+        private const val KEY_CL_RECENTLY = "cl_recently_added"
+        private const val KEY_CL_COMPLETED = "cl_completed"
+        private const val KEY_CL_LIBRARY = "cl_library"
         private const val KEY_AUTO_COMPLETE_MINUTES = "auto_complete_minutes"
     }
 
@@ -248,6 +252,25 @@ class SessionManager @Inject constructor(
     var hideCompleted: Boolean
         get() = prefs.getBoolean(KEY_HIDE_COMPLETED, false)
         set(value) = prefs.edit().putBoolean(KEY_HIDE_COMPLETED, value).apply()
+
+    // Per-section collapse state for the library screen. Persisted so a large-library
+    // user can keep sections they don't care about folded across sessions.
+    var clContinueListening: Boolean
+        get() = prefs.getBoolean(KEY_CL_CONTINUE, false)
+        set(value) = prefs.edit().putBoolean(KEY_CL_CONTINUE, value).apply()
+
+    var clRecentlyAdded: Boolean
+        get() = prefs.getBoolean(KEY_CL_RECENTLY, false)
+        set(value) = prefs.edit().putBoolean(KEY_CL_RECENTLY, value).apply()
+
+    var clCompleted: Boolean
+        get() = prefs.getBoolean(KEY_CL_COMPLETED, false)
+        set(value) = prefs.edit().putBoolean(KEY_CL_COMPLETED, value).apply()
+
+    var clMyLibrary: Boolean
+        get() = prefs.getBoolean(KEY_CL_LIBRARY, false)
+        set(value) = prefs.edit().putBoolean(KEY_CL_LIBRARY, value).apply()
+
 
 
 

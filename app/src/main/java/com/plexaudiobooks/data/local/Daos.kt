@@ -59,6 +59,16 @@ interface CachedLibraryDao {
     @Query("SELECT * FROM cached_library WHERE title LIKE :query OR author LIKE :query ORDER BY title ASC")
     fun searchLibrary(query: String): Flow<List<CachedLibraryEntity>>
 
+    /** All cached books as a suspend one-shot read — used by the Auto browse tree.
+     *  Not paging-safe for huge libraries, but that's acceptable for the Auto use case
+     *  which caps at the 20 most recent titles anyway. */
+    @Query("SELECT * FROM cached_library ORDER BY title ASC")
+    suspend fun getAllBooks(): List<CachedLibraryEntity>
+
+    /** Recently added books — newest first, capped at 20 for the Auto browse tree. */
+    @Query("SELECT * FROM cached_library ORDER BY addedAt DESC, title ASC LIMIT 20")
+    suspend fun getRecentlyAddedRecent(): List<CachedLibraryEntity>
+
     @Query("UPDATE cached_library SET completed = :completed WHERE ratingKey = :ratingKey")
     suspend fun setCompleted(ratingKey: String, completed: Boolean)
 
@@ -118,6 +128,24 @@ interface CachedLibraryPagingDao {
     @Query("SELECT ratingKey FROM downloaded_books")
     fun getDownloadedKeys(): Flow<List<String>>
 
+    /** Non-reactive one-shot Continue Listening list — used by the Auto browse tree
+     *  (the Flow variant would require a collect; this returns the data immediately). */
+    @Query("""
+    SELECT cl.ratingKey, cl.title, cl.author, cl.thumbPath,
+           cl.durationMs, cl.viewOffset, cl.addedAt,
+           COALESCE(cl.completed, 0) AS completed,
+           COALESCE(cl.shelved, 0) AS shelved,
+           pp.positionMs, pp.lastUpdated
+    FROM cached_library cl
+    INNER JOIN playback_progress pp ON CAST(cl.ratingKey AS TEXT) = CAST(pp.ratingKey AS TEXT)
+    WHERE pp.positionMs > 0
+      AND (cl.completed = 0 OR cl.completed IS NULL)
+      AND (cl.shelved = 0 OR cl.shelved IS NULL)
+    ORDER BY pp.lastUpdated DESC
+    LIMIT 20
+""")
+    suspend fun getContinueListeningSync(): List<ContinueListeningItem>
+
     // Books with progress but not completed and not shelved (Continue Listening)
     @Query("""
     SELECT cl.ratingKey, cl.title, cl.author, cl.thumbPath,
@@ -138,6 +166,12 @@ interface CachedLibraryPagingDao {
     // Completed books
     @Query("SELECT * FROM cached_library WHERE completed = 1 ORDER BY title ASC")
     fun getCompleted(): Flow<List<CachedLibraryEntity>>
+
+    // Recently added section: newest books first, capped at 20 to keep the home screen
+    // snappy on large libraries. Includes completed books too — a just-added book should
+    // surface here regardless of its read state (it ages out naturally).
+    @Query("SELECT * FROM cached_library ORDER BY addedAt DESC, title ASC LIMIT 20")
+    fun getRecentlyAdded(): Flow<List<CachedLibraryEntity>>
 }
 
 // Projection for Continue Listening — library item plus progress fields
@@ -155,3 +189,56 @@ data class ContinueListeningItem(
     val positionMs: Long,
     val lastUpdated: Long
 )
+
+/**
+ * DAO for the cached chapter table (DB v5).
+ *
+ * Chapters are write-once-per-book: they're populated by the first successful
+ * fetchBookDetail() for a given ratingKey and read on every subsequent play() from Room.
+ * Because chapters are immutable for a given book, REPLACE-on-conflict idempotent inserts
+ * are sufficient — a re-fetch that produces the same data overwrites cleanly, and a
+ * re-fetch that produces nothing leaves the good cached copy intact.
+ */
+@Dao
+interface CachedChapterDao {
+
+    /** All chapters for one book, ordered. Empty list = never cached (or book genuinely
+     *  has no chapters, in which case the synthetic single-chapter fallback is used). */
+    @Query("SELECT * FROM cached_chapters WHERE ratingKey = :ratingKey ORDER BY chapterIndex ASC")
+    suspend fun getChapters(ratingKey: String): List<CachedChapterEntity>
+
+    /** Persist a book's chapters. REPLACE so a later re-fetch (e.g. after a library
+     *  metadata update) silently overwrites; the normal path never re-fetches. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(chapters: List<CachedChapterEntity>)
+
+    /** Whether we already have chapters cached for this book — let callers skip the
+     *  network fetch entirely when the local copy exists. */
+    @Query("SELECT COUNT(*) FROM cached_chapters WHERE ratingKey = :ratingKey")
+    suspend fun getChapterCount(ratingKey: String): Int
+
+    /** Remove cached chapters for a book (e.g. when the user removes the book). The
+     *  auto-eviction on completion deliberately does NOT delete chapters — they're small
+     *  and a replayed/re-downloaded book should keep its chapter map. */
+    @Query("DELETE FROM cached_chapters WHERE ratingKey = :ratingKey")
+    suspend fun deleteChapters(ratingKey: String)
+}
+
+/**
+ * DAO for the per-book playback-detail cache (DB v5).
+ *
+ * Same write-once-read-forever model as the chapter cache: fetchBookDetail() upserts,
+ * play() reads. Never bulk-cleared — this data survives library refreshes on purpose.
+ */
+@Dao
+interface BookDetailCacheDao {
+
+    @Query("SELECT * FROM book_detail_cache WHERE ratingKey = :ratingKey")
+    suspend fun get(ratingKey: String): BookDetailCacheEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(entity: BookDetailCacheEntity)
+
+    @Query("DELETE FROM book_detail_cache WHERE ratingKey = :ratingKey")
+    suspend fun delete(ratingKey: String)
+}

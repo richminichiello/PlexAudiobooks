@@ -156,7 +156,7 @@ class SettingsFragment : Fragment() {
     }
 
     private fun clearDownloadsCache() {
-        lifecycleScope.launch {
+        viewLifecycleOwner.lifecycleScope.launch {
             // Delete all downloaded files
             val downloadsDir = File(requireContext().filesDir, "downloads")
             downloadsDir.walkTopDown().filter { it.isFile }.forEach { it.delete() }

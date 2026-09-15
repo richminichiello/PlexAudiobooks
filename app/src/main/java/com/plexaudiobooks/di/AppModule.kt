@@ -118,7 +118,8 @@ object AppModule {
             .addMigrations(
                 AudiobookDatabase.MIGRATION_1_2,
                 AudiobookDatabase.MIGRATION_2_3,
-                AudiobookDatabase.MIGRATION_3_4
+                AudiobookDatabase.MIGRATION_3_4,
+                AudiobookDatabase.MIGRATION_4_5
             )
             .fallbackToDestructiveMigration()
             .build()
@@ -127,4 +128,6 @@ object AppModule {
     @Provides fun provideDownloadDao(db: AudiobookDatabase) = db.downloadDao()
     @Provides fun provideLibraryDao(db: AudiobookDatabase) = db.libraryDao()
     @Provides fun provideLibraryPagingDao(db: AudiobookDatabase) = db.libraryPagingDao()
+    @Provides fun provideChapterDao(db: AudiobookDatabase) = db.chapterDao()
+    @Provides fun provideBookDetailCacheDao(db: AudiobookDatabase) = db.bookDetailCacheDao()
 }

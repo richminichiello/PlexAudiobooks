@@ -14,8 +14,8 @@ android {
         applicationId "com.plexaudiobooks"
         minSdk 26
         targetSdk 35
-        versionCode 45
-        versionName "1.6.5"
+        versionCode 60
+        versionName "1.9.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
@@ -95,7 +95,8 @@ dependencies {
     implementation 'androidx.media3:media3-exoplayer:1.5.0'
     implementation 'androidx.media3:media3-ui:1.5.0'
     implementation 'androidx.media3:media3-datasource-okhttp:1.5.0'
-    implementation 'androidx.media:media:1.7.0'  // MediaBrowserServiceCompat + MediaSessionCompat
+    implementation 'androidx.media3:media3-session:1.5.0'  // MediaSession + MediaSessionService built on the raw ExoPlayer (book-absolute position/duration; book-level notification seek bar)
+    implementation 'androidx.media:media:1.7.0'  // MediaBrowserServiceCompat + MediaSessionCompat — TEMPORARY, removed once the MediaSessionCompat plumbing is gone
 
     // Glide (cover art)
     implementation 'com.github.bumptech.glide:glide:4.16.0'

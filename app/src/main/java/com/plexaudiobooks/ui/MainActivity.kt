@@ -1,6 +1,5 @@
 package com.plexaudiobooks.ui
 
-import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -17,6 +16,7 @@ import com.bumptech.glide.Glide
 import com.plexaudiobooks.R
 import com.plexaudiobooks.databinding.ActivityMainBinding
 import com.plexaudiobooks.service.AudiobookPlaybackService
+import com.plexaudiobooks.ui.playback.CompletedRestartPrompt
 import com.plexaudiobooks.ui.playback.PlaybackManager
 import com.plexaudiobooks.ui.playback.ResumePrompt
 import com.plexaudiobooks.ui.player.PlayerSheetFragment
@@ -39,6 +39,13 @@ class MainActivity : AppCompatActivity() {
     private var playerSheet: PlayerSheetFragment? = null
     private var resumeDialog: AlertDialog? = null
     private var shownResumePrompt: ResumePrompt? = null
+    private var completedRestartDialog: AlertDialog? = null
+    private var shownCompletedRestartPrompt: CompletedRestartPrompt? = null
+
+    // Mini-player stability (1.8.1): hold the last non-null book so the bar doesn't
+    // blank when state.book transitions through null during the play() async gap.
+    private var lastDisplayBook: com.plexaudiobooks.data.model.AudioBook? = null
+    private var currentMiniBookKey: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +84,11 @@ class MainActivity : AppCompatActivity() {
         // from the beginning; dismissing the dialog aborts the play without audio.
         observeResumePrompt()
 
+        // Completed-book restart prompt: shown by PlaybackManager whenever the tapped book
+        // is marked completed. Replaces the old silent "was the saved position near the
+        // end?" auto-restart heuristic — see PlaybackManager's class doc for why.
+        observeCompletedRestartPrompt()
+
         // Back-press: if the player sheet is open, dismiss it first; otherwise hand off to
         // NavController, and on a true root screen warn-then-exit (stopping playback).
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -87,7 +99,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 val currentDest = navController.currentDestination?.id
                 val isRootScreen = currentDest == R.id.libraryFragment ||
-                                   currentDest == R.id.authFragment
+                        currentDest == R.id.authFragment
                 if (isRootScreen) {
                     if (backPressedOnce) {
                         stopPlaybackAndExit()
@@ -109,40 +121,51 @@ class MainActivity : AppCompatActivity() {
     // ── Mini-player ─────────────────────────────────────────────────────────────
 
     private fun bindMiniPlayer() {
-        // binding.miniPlayer is a ViewMiniPlayerBinding (the <include>); .root is the
-        // LinearLayout mini-player root, which is what we physically click.
         val mini = binding.miniPlayer.root
         mini.setOnClickListener { showPlayerSheet() }
         binding.miniPlayer.btnMiniPlayPause.setOnClickListener {
             playbackManager.togglePlayPause()
         }
-
+        // Mini-player visibility: driven by NOW-playing content, not drag state. The
+        // isStarting + hasContent combo covers the Loading phase → Playing → Paused.
+        // A sheet dismissal doesn't change state — the bar should STAY visible so the
+        // user can retrieve the sheet.
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 playbackManager.state.collect { state ->
                     mini.isVisible = state.hasContent
                     if (!state.hasContent) return@collect
-                    // While play() is resolving the book, show a loading affordance instead
-                    // of a blank bar so the tap is acknowledged within a frame and a second
-                    // tap on the play button is ignored (disabled).
-                    if (state.isStarting && state.book == null) {
-                        binding.miniPlayer.tvMiniTitle.text =
-                            getString(R.string.loading)
+
+                    val displayBook = state.book ?: lastDisplayBook
+                    if (state.book != null) lastDisplayBook = state.book
+
+                    if (state.isStarting && displayBook == null) {
+                        binding.miniPlayer.tvMiniTitle.text = getString(R.string.loading)
                         binding.miniPlayer.tvMiniAuthor.text = ""
                         binding.miniPlayer.btnMiniPlayPause.isEnabled = false
                         binding.miniPlayer.btnMiniPlayPause.setIconResource(R.drawable.ic_play)
                     } else {
-                        binding.miniPlayer.tvMiniTitle.text = state.book?.title ?: ""
-                        binding.miniPlayer.tvMiniAuthor.text = state.book?.author ?: ""
+                        binding.miniPlayer.tvMiniTitle.text = displayBook?.title ?: ""
+                        binding.miniPlayer.tvMiniAuthor.text = displayBook?.author ?: ""
                         binding.miniPlayer.btnMiniPlayPause.isEnabled = true
                         binding.miniPlayer.btnMiniPlayPause.setIconResource(
                             if (state.isPlaying) R.drawable.ic_pause else R.drawable.ic_play
                         )
-                        val thumbUrl = playbackManager.session.buildThumbUrl(state.book?.thumbPath)
-                        if (thumbUrl != null) {
-                            Glide.with(this@MainActivity).load(thumbUrl)
-                                .placeholder(R.drawable.ic_book_placeholder)
-                                .into(binding.miniPlayer.ivMiniCover)
+                        // Only rebuild Glide request when the BOOK identity changes.
+                        // Glide caches by URL — same URL is free, new URL reloads art.
+                        if (displayBook?.ratingKey != currentMiniBookKey) {
+                            currentMiniBookKey = displayBook?.ratingKey
+                            val thumbUrl =
+                                playbackManager.session.buildThumbUrl(displayBook?.thumbPath)
+                            if (thumbUrl != null) {
+                                Glide.with(this@MainActivity).load(thumbUrl)
+                                    .placeholder(R.drawable.ic_book_placeholder)
+                                    .into(binding.miniPlayer.ivMiniCover)
+                            } else {
+                                binding.miniPlayer.ivMiniCover.setImageResource(
+                                    R.drawable.ic_book_placeholder
+                                )
+                            }
                         }
                     }
                 }
@@ -158,6 +181,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    // ── Resume prompt (fresh-install server-position resume) ────────────────────
 
     private fun observeResumePrompt() {
         lifecycleScope.launch {
@@ -204,11 +229,58 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ── Completed-book restart prompt ────────────────────────────────────────────
+
+    private fun observeCompletedRestartPrompt() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                playbackManager.state.collect { state ->
+                    val prompt = state.showCompletedRestartPrompt
+                    if (prompt == null) {
+                        completedRestartDialog?.let {
+                            if (it.isShowing) it.dismiss(); completedRestartDialog = null
+                        }
+                        shownCompletedRestartPrompt = null
+                        return@collect
+                    }
+                    if (prompt != shownCompletedRestartPrompt) {
+                        completedRestartDialog?.let {
+                            if (it.isShowing) it.dismiss(); completedRestartDialog = null
+                        }
+                        showCompletedRestartDialog(prompt)
+                        shownCompletedRestartPrompt = prompt
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showCompletedRestartDialog(prompt: CompletedRestartPrompt) {
+        completedRestartDialog = AlertDialog.Builder(this)
+            .setTitle(prompt.title)
+            .setMessage("This book has already been completed. Do you want to start it over?")
+            .setPositiveButton("Start Over") { dlg, _ ->
+                playbackManager.confirmCompletedRestart(true)
+                dlg.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel) { dlg, _ ->
+                playbackManager.confirmCompletedRestart(false)
+                dlg.dismiss()
+            }
+            .setOnCancelListener {
+                // Back press / outside tap: treat the same as declining — no playback.
+                playbackManager.cancelCompletedRestartPrompt()
+            }
+            .setCancelable(true)
+            .show()
+    }
+
     private fun stopPlaybackAndExit() {
-        // Stop the playback service so audio doesn't continue after exit
+        // Stop the player so audio doesn't continue after exit (the controller routes a stop
+        // to the service; the Media3 session tears its own notification down). The bare
+        // stopService(intent) that lived here is gone — under Media3 the service lifecycle is
+        // controller-driven, and stopPlaybackAndService() in the service handles teardown.
         playbackManager.stop()
-        val serviceIntent = Intent(this, AudiobookPlaybackService::class.java)
-        stopService(serviceIntent)
         finishAffinity()
     }
 
@@ -216,25 +288,7 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         binding.root.removeCallbacks { backPressedOnce = false } // avoid leak from postDelayed
         resumeDialog?.let { if (it.isShowing) it.dismiss() }
+        completedRestartDialog?.let { if (it.isShowing) it.dismiss() }
         playbackManager.release()
-    }
-
-    companion object {
-        const val ACTION_PLAY = "com.plexaudiobooks.ACTION_PLAY"
-        const val EXTRA_RATING_KEY = "rating_key"
-        // The ratingKey to use for /:/timeline progress reporting. This is the TRACK
-        // ratingKey (not the album) when the book has track children — Plex's timeline
-        // endpoint keys off the track, so reporting with the album key or a part key (e.g.
-        // /library/parts/12345/…) is silently dropped. Falls back to the album ratingKey
-        // for books without track children. See PlaybackManager.play() → sendPlayIntent.
-        const val EXTRA_KEY = "key"
-        const val EXTRA_STREAM_URL = "stream_url"
-        const val EXTRA_TITLE = "title"
-        const val EXTRA_AUTHOR = "author"
-        const val EXTRA_THUMB_URL = "thumb_url"
-        const val EXTRA_START_POSITION = "start_position"
-        const val EXTRA_SPEED      = "speed"
-        const val EXTRA_PART_KEYS  = "part_keys"
-        const val EXTRA_DURATION_MS      = "duration_ms"
     }
 }

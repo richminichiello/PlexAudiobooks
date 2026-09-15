@@ -11,14 +11,32 @@
         android:layout_marginTop="8dp"
         android:background="?attr/colorSurfaceVariant" />
 
-    <TextView
+    <LinearLayout
+        android:id="@+id/headerRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:paddingHorizontal="16dp"
         android:paddingTop="16dp"
         android:paddingBottom="8dp"
-        android:text="@string/completed"
-        android:textSize="16sp"
-        android:textStyle="bold" />
+        android:background="?attr/selectableItemBackground">
+
+        <TextView
+            android:id="@+id/tvSectionTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/completed"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/ivCollapseChevron"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:contentDescription="@string/collapse_section"
+            android:src="@android:drawable/arrow_down_float" />
+    </LinearLayout>
 
 </LinearLayout>

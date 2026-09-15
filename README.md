@@ -110,27 +110,29 @@ app/src/main/java/com/plexaudiobooks/
 
 ## Architecture
 
-```
+```text
 UI Layer (Fragments + ViewModels)  ──collect──►  PlaybackManager (singleton @Singleton)
         │                                                  │
         ▼                                                  ▼
-Repository (PlexRepository) ─────► Room DB     MediaControllerCompat ─► AudiobookPlaybackService
+Repository (PlexRepository) ─────► Room DB     MediaController (Media3) ─► AudiobookPlaybackService
         │                         (local cache,    (persistent for process lifetime)
         ▼                          progress,                 │
    Plex API (Retrofit)            downloads,                ▼
-        │                          completed/shelved)   ExoPlayer
-   SessionManager ◄─────────────────────────             (streams local file or server URL)
+        │                         chapters,            ExoPlayer
+   SessionManager ◄──────────────  book detail)     (per-chapter playlist items)
    (EncryptedSharedPreferences; server URL resolution, tokens, download hours)
 ```
 
 **Key design decisions:**
 
-- **Singleton PlaybackManager (v1.6.0)**: one persistent `MediaControllerCompat` bound to the playback service for the whole process — it is **not** torn down on fragment lifecycle, which fixes the old "playback dies, can't restart without force-quitting" symptom. Every Now-Playing UI (mini-player, player sheet) collects `PlaybackManager.state` instead of re-deriving book/position on each screen.
-- **Player is a sheet, not a screen**: the full player is a `BottomSheetDialogFragment` shown from `MainActivity`; swipe-down or back dismisses it. It is not a navigation destination.
-- **Service stays `MediaSessionCompat` (not Media3's `MediaSessionService`)**: that API cannot override `PlaybackState.position`, which would make chapter-relative notification/car-display progress impossible. The seek contract (chapter-relative into `onSeekTo`) is preserved.
-- **Single source of truth**: Library data flows `API → Room → UI` via `Flow`. The UI always reads from Room; the repository refreshes from the network and re-applies user-set completed/shelved flags atomically across a refresh (so the Continue Listening section never flickers and disappears on swipe-refresh).
-- **Progress persistence**: Playback position is saved to Room every 10 seconds. On app kill/crash, progress is recovered from Room on next launch and re-synced to Plex.
-- **Offline routing**: `PlaybackManager.buildStreamUrl()` returns a `file://` URI when the resume position is within the downloaded window; otherwise it streams from the server so ExoPlayer never seeks past the end of a truncated local file.
+- **Singleton PlaybackManager (1.6.0)**: one persistent `MediaController` bound to the playback service for the whole process — **not** torn down on fragment lifecycle. Every Now-Playing UI (mini-player, player sheet) collects `PlaybackManager.state`.
+- **Chapter-clip playlist (1.8.0)**: playback is a playlist of `MediaItem` clips, one per chapter, each scoped to that chapter's time range. The notification seekbar is natively chapter-relative; book-absolute position is derived once for progress/Room/`/:/timeline`.
+- **Player is a sheet, not a screen**: `BottomSheetDialogFragment` shown from `MainActivity`; swipe-down dismisses. Not a navigation destination.
+- **Service stays `MediaSessionService` (Media3)**: the session is built on the **raw** `ExoPlayer` (no wrapper). Chapter-relative display is handled by the playlist itself — no `ChapterAwarePlayer` needed.
+- **Single source of truth**: Library data flows `API → Room → UI` via `Flow`. Completed/shelved flags re-applied atomically across refresh.
+- **Two-phase play (1.8.x)**: `play()` reads Room first (chapters + book detail cache) and starts audio instantly without a network call; then refreshes from the network in the background.
+- **Progress persistence**: Position saved to Room every 10 seconds and to Plex (`/:/timeline`). On app kill/crash, progress is recovered from Room on next launch and re-synced to Plex.
+- **Offline routing**: `PlaybackManager.buildStreamUrl()` returns a `file://` URI when the resume position is within the downloaded window; otherwise streams from the server so ExoPlayer never seeks past the end of a truncated local file.
 - **Secure auth**: Plex tokens are never stored in plaintext. `EncryptedSharedPreferences` uses AES-256-GCM for values and AES-256-SIV for keys, backed by Android Keystore.
 
 ---

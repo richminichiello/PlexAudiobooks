@@ -137,6 +137,12 @@ class LibraryViewModel @Inject constructor(
     val completedBooks: Flow<List<CachedLibraryEntity>> =
         libraryPagingDao.getCompleted()
 
+    // Recently Added: newest 20 books, always sorted by addedAt DESC. Independent of the
+    // library sort preference — the section is definitionally "recent", so reordering it
+    // by title/author would defeat its purpose.
+    val recentlyAdded: Flow<List<CachedLibraryEntity>> =
+        libraryPagingDao.getRecentlyAdded()
+
     //val lastPlayed = progressDao.getLastPlayed()
     //val downloads = downloadDao.getAllDownloads()
 
@@ -190,6 +196,11 @@ class LibraryViewModel @Inject constructor(
 
     fun searchBooks(query: String): Flow<List<CachedLibraryEntity>> =
         repository.searchLibrary(query)
+
+    fun setContinueListeningCollapsed(v: Boolean) { session.clContinueListening = v }
+    fun setRecentlyAddedCollapsed(v: Boolean)     { session.clRecentlyAdded = v }
+    fun setCompletedCollapsed(v: Boolean)         { session.clCompleted = v }
+    fun setMyLibraryCollapsed(v: Boolean)        { session.clMyLibrary = v }
 
     fun buildThumbUrl(thumbPath: String?): String? = session.buildThumbUrl(thumbPath)
 }

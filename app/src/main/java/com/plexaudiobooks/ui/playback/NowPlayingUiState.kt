@@ -36,7 +36,14 @@ data class NowPlayingUiState(
      * [com.plexaudiobooks.ui.playback.PlaybackManager.confirmResume]. Cleared (set back
      * to null) once a choice is made or the play is abandoned.
      */
-    val showResumePrompt: ResumePrompt? = null
+    val showResumePrompt: ResumePrompt? = null,
+    /**
+     * Non-null when PlaybackManager.play() paused because the tapped book is marked
+     * completed — the user is asked to explicitly confirm starting over rather than the
+     * app silently guessing (from a saved-position/duration comparison) whether it's safe
+     * to auto-restart. See [CompletedRestartPrompt] for why this replaced that heuristic.
+     */
+    val showCompletedRestartPrompt: CompletedRestartPrompt? = null
 ) {
     /** True when something is loaded OR a play is starting — drives mini-player visibility
      *  so the bar appears immediately on tap, before the book is resolved. */
@@ -56,4 +63,20 @@ data class ResumePrompt(
     val ratingKey: String,
     val serverPositionMs: Long,
     val formattedPosition: String
+)
+
+/**
+ * Shown when the user taps play on a book already marked completed. PlaybackManager used
+ * to auto-decide whether to restart from 0 by comparing the saved position against a
+ * duration value that can itself be stale or mismatched (the same class of bug fixed once
+ * already this project — see the duration-overlay fix in play()). That comparison could
+ * silently misjudge "near the end" and hand a resume position to the chapter-clip playlist
+ * that falls outside the resolved clip's range — the suspected cause of the replay-completed
+ * -book crash. This prompt removes the heuristic entirely for this case: completed books
+ * always ask, and always restart from 0 on confirmation. No resume-from-saved-position
+ * option is offered — a completed book's saved position isn't a meaningful place to resume.
+ */
+data class CompletedRestartPrompt(
+    val ratingKey: String,
+    val title: String
 )

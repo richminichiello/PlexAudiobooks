@@ -7,7 +7,9 @@ import androidx.appcompat.widget.SearchView
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
 import androidx.paging.LoadState
 import androidx.recyclerview.widget.ConcatAdapter
@@ -32,12 +34,15 @@ class LibraryFragment : Fragment() {
     @Inject lateinit var playbackManager: PlaybackManager
 
     private lateinit var continueHeader: ContinueListeningHeaderAdapter
+    private lateinit var recentlyAddedSection: RecentlyAddedSectionAdapter
+    private lateinit var myLibraryHeader: MyLibraryHeaderAdapter
     private lateinit var bookAdapter: BookAdapter
     private lateinit var completedSection: CompletedSectionAdapter
     private lateinit var concatAdapter: ConcatAdapter
 
     private var searchJob: Job? = null
     private var isGridMode = true
+    private var currentSearchQuery: String = ""
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
@@ -68,8 +73,35 @@ class LibraryFragment : Fragment() {
                 playbackManager.play(item.ratingKey)
                 (requireActivity() as? com.plexaudiobooks.ui.MainActivity)?.showPlayerSheet()
             },
-            onBookLongClick = { item -> showContinueListeningBookMenu(item) }
+            onBookLongClick = { item -> showContinueListeningBookMenu(item) },
+            onCollapseToggle = { collapsed ->
+                viewModel.setContinueListeningCollapsed(collapsed)
+                continueHeader.isCollapsed = collapsed
+            }
         )
+        continueHeader.isCollapsed = viewModel.session.clContinueListening
+
+        recentlyAddedSection = RecentlyAddedSectionAdapter(
+            thumbUrlBuilder = { viewModel.buildThumbUrl(it) },
+            onBookClick = { entity ->
+                findNavController().navigate(
+                    LibraryFragmentDirections.actionLibraryToDetail(entity.ratingKey)
+                )
+            },
+            onCollapseToggle = { collapsed ->
+                viewModel.setRecentlyAddedCollapsed(collapsed)
+                recentlyAddedSection.isCollapsed = collapsed
+            }
+        )
+        recentlyAddedSection.isCollapsed = viewModel.session.clRecentlyAdded
+        recentlyAddedSection.isGridMode = isGridMode
+
+        myLibraryHeader = MyLibraryHeaderAdapter { collapsed ->
+            viewModel.setMyLibraryCollapsed(collapsed)
+            myLibraryHeader.isCollapsed = collapsed
+            performSearch(currentSearchQuery)
+        }
+        myLibraryHeader.isCollapsed = viewModel.session.clMyLibrary
 
         bookAdapter = BookAdapter(
             onBookClick = { book ->
@@ -108,9 +140,14 @@ class LibraryFragment : Fragment() {
                     }
                     .setNegativeButton(android.R.string.cancel, null)
                     .show()
+            },
+            onCollapseToggle = { collapsed ->
+                viewModel.setCompletedCollapsed(collapsed)
+                completedSection.isCollapsed = collapsed
             }
         )
         completedSection.isGridMode = isGridMode
+        completedSection.isCollapsed = viewModel.session.clCompleted
 
         // ConcatAdapter: Continue Listening header | paged books | completed section
         // GridLayoutManager with span control so header/footer take full width
@@ -118,6 +155,8 @@ class LibraryFragment : Fragment() {
         // This prevents view type clashes between header/book/completed adapters
         concatAdapter = ConcatAdapter(
             continueHeader,
+            recentlyAddedSection,
+            myLibraryHeader,
             bookAdapter,
             completedSection
         )
@@ -130,10 +169,12 @@ class LibraryFragment : Fragment() {
             this.layoutManager = layoutManager
         }
 
-        lifecycleScope.launch {
-            bookAdapter.loadStateFlow.collectLatest { states ->
-                binding.swipeRefresh.isRefreshing =
-                    states.refresh is LoadState.Loading
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                bookAdapter.loadStateFlow.collectLatest { states ->
+                    binding.swipeRefresh.isRefreshing =
+                        states.refresh is LoadState.Loading
+                }
             }
         }
     }
@@ -182,6 +223,7 @@ class LibraryFragment : Fragment() {
         viewModel.session.libraryViewMode = if (isGridMode) "grid" else "list"
         bookAdapter.isGridMode = isGridMode
         continueHeader.isGridMode = isGridMode
+        recentlyAddedSection.isGridMode = isGridMode
         completedSection.isGridMode = isGridMode
         val lm = makeLayoutManager()
         applySpanSizeLookup(lm)
@@ -193,7 +235,18 @@ class LibraryFragment : Fragment() {
         lm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int {
                 if (!::completedSection.isInitialized || !::concatAdapter.isInitialized) return 1
-                if (position == 0) return lm.spanCount
+                // Continue Listening is always row 0; Recently Added row 1 when present;
+                // My Library header is a single item immediately before the paged book grid.
+                // Count the preceding one-item adapters so the math scales correctly whether
+                // or not each section currently has items.
+                var bookGridStart = 1 // continueHeader always occupies position 0
+                if (recentlyAddedSection.hasContent()) bookGridStart += 1
+                val myLibraryHeaderPos = bookGridStart
+                bookGridStart += 1 // myLibraryHeader always occupies one row
+
+                if (position == 0) return lm.spanCount                        // Continue Listening
+                if (recentlyAddedSection.hasContent() && position == 1) return lm.spanCount
+                if (position == myLibraryHeaderPos) return lm.spanCount         // "My Library" header
                 val sc = completedSection.itemCount
                 val total = concatAdapter.itemCount
                 return if (sc > 0 && position >= total - sc) lm.spanCount else 1
@@ -209,16 +262,29 @@ class LibraryFragment : Fragment() {
 
     private fun observeData() {
         // Continue Listening
-        lifecycleScope.launch {
-            viewModel.continueListening.collect { items ->
-                continueHeader.submitList(items)
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.continueListening.collect { items ->
+                    continueHeader.submitList(items)
+                }
+            }
+        }
+
+        // Recently added
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.recentlyAdded.collectLatest { items ->
+                    recentlyAddedSection.submitList(items)
+                }
             }
         }
 
         // Completed books
-        lifecycleScope.launch {
-            viewModel.completedBooks.collectLatest { items ->
-                completedSection.submitList(items)
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.completedBooks.collectLatest { items ->
+                    completedSection.submitList(items)
+                }
             }
         }
 
@@ -226,16 +292,20 @@ class LibraryFragment : Fragment() {
         performSearch("")
 
         // Offline badges
-        lifecycleScope.launch {
-            viewModel.downloadedKeys.collect { keys ->
-                bookAdapter.downloadedKeys = keys
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.downloadedKeys.collect { keys ->
+                    bookAdapter.downloadedKeys = keys
+                }
             }
         }
 
         // UI state
-        lifecycleScope.launch {
-            viewModel.uiState.collectLatest { state ->
-                if (!state.isLoading) binding.swipeRefresh.isRefreshing = false
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.uiState.collectLatest { state ->
+                    if (!state.isLoading) binding.swipeRefresh.isRefreshing = false
+                }
             }
         }
     }
@@ -258,8 +328,14 @@ class LibraryFragment : Fragment() {
     }
 
     private fun performSearch(query: String) {
+        currentSearchQuery = query
         searchJob?.cancel()
-        searchJob = lifecycleScope.launch {
+        searchJob = viewLifecycleOwner.lifecycleScope.launch {
+            if (myLibraryHeader.isCollapsed) {
+                // Collapse the grid to 0 rows; the header stays visible above it.
+                bookAdapter.submitData(androidx.paging.PagingData.empty())
+                return@launch
+            }
             if (query.isBlank()) {
                 viewModel.pagedBooks.collectLatest { bookAdapter.submitData(it) }
             } else {

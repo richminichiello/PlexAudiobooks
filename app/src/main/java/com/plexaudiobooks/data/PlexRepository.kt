@@ -27,7 +27,10 @@ class PlexRepository @Inject constructor(
     private val session: SessionManager,
     private val progressDao: PlaybackProgressDao,
     private val downloadDao: DownloadedBookDao,
-    private val libraryDao: CachedLibraryDao
+    private val libraryDao: CachedLibraryDao,
+    private val chapterDao: CachedChapterDao,
+    private val bookDetailCacheDao: BookDetailCacheDao,
+    private val libraryPagingDao: CachedLibraryPagingDao
 ) {
 
     // ── URL helpers ─────────────────────────────────────────────────────────
@@ -319,11 +322,117 @@ class PlexRepository @Inject constructor(
     //fun observeLibrary(): Flow<List<CachedLibraryEntity>> = libraryDao.getAllCached()
     suspend fun getCachedBook(ratingKey: String): CachedLibraryEntity? =
         libraryDao.getBook(ratingKey)
+
+    /** Direct accessor for the Continue Listening row projection — used by the Android
+     *  Auto browse callbacks in the service (this is what the DAO returns). */
+    suspend fun getContinueListeningEntities(): List<ContinueListeningItem> =
+        libraryPagingDao.getContinueListeningSync()
+
+    /** Direct accessor for all books in the cached library (not paged). Used by the
+     *  Auto "Library" browse node. */
+    suspend fun getAllCachedBooks(): List<CachedLibraryEntity> =
+        libraryDao.getAllBooks()
+
+    /** Recently added books — newest 20 by addedAt, from cache. Non-suspend pair of
+     *  the recent-added DAO method. */
+    suspend fun getRecentlyAddedCached(): List<CachedLibraryEntity> =
+        libraryDao.getRecentlyAddedRecent()
+
     suspend fun setCompleted(ratingKey: String, completed: Boolean) {
         libraryDao.setCompleted(ratingKey, completed)
     }
     suspend fun setShelved(ratingKey: String, shelved: Boolean) {
         libraryDao.setShelved(ratingKey, shelved)
+    }
+
+    // ── Chapter cache (DB v5) ───────────────────────────────────────────────
+    //
+    // Chapters are immutable per book, so they are write-once-read-forever. The first
+    // successful fetchBookDetail() populates the table; every subsequent play() reads
+    // chapters from Room instantly (no network), which is what makes "continue a book"
+    // start immediately AND makes the chapter list stable regardless of connectivity.
+
+    /** Read the cached chapter list for a book. Empty list = never fetched (or the book
+     *  genuinely has no chapter markers — in which case the caller uses the synthetic
+     *  single-chapter fallback, identical to pre-cache behavior). Filtered to sane rows:
+     *  any row with endMs <= startMs is a corrupted write and would produce a zero-length
+     *  clip, so it's dropped. */
+    suspend fun getCachedChapters(ratingKey: String): List<Chapter> =
+        chapterDao.getChapters(ratingKey)
+            .filter { it.endMs > it.startMs }
+            .sortedBy { it.chapterIndex }
+            .map { e ->
+                Chapter(
+                    id = e.ratingKey.hashCode().toLong() * 1000 + e.chapterIndex,
+                    index = e.chapterIndex,
+                    title = e.title,
+                    startMs = e.startMs,
+                    endMs = e.endMs
+                )
+            }
+
+    /** True when we already have chapters for this book — lets the caller skip the
+     *  network entirely on the fast path. */
+    suspend fun hasCachedChapters(ratingKey: String): Boolean =
+        chapterDao.getChapterCount(ratingKey) > 0
+
+    /** Persist a freshly-fetched chapter list. REPLACE-on-conflict makes this safe to
+     *  call on every successful fetchBookDetail — overwrites in place. A fetch that
+     *  returns an EMPTY chapter list is deliberately NOT written: an empty write would
+     *  erase a previously-good cache and put us back on the network fetch path. */
+    suspend fun saveChapters(ratingKey: String, chapters: List<Chapter>) {
+        if (chapters.isEmpty()) return
+        chapterDao.insertAll(
+            chapters.map { c ->
+                CachedChapterEntity(
+                    ratingKey = ratingKey,
+                    chapterIndex = c.index,
+                    title = c.title,
+                    startMs = c.startMs,
+                    endMs = c.endMs
+                )
+            }
+        )
+    }
+
+    /** Drop a book's cached chapters. Callers: explicit book removal. The completion
+     *  auto-evict deliberately keeps chapters (small, and a replayed book needs them). */
+    suspend fun deleteChapters(ratingKey: String) =
+        chapterDao.deleteChapters(ratingKey)
+
+    // ── Book-detail cache (DB v5) ───────────────────────────────────────────
+    //
+    // The stream part key / part-key list / track ratingKey / true duration are NOT
+    // present in cached_library (album-level rows) — they're only known after
+    // fetchBookDetail(). This cache lets every play() after the first build its stream
+    // URL and timeline key from Room with no network round-trip.
+
+    /** Read the cached playback details for a book, or null if this book has never had a
+     *  successful fetchBookDetail(). */
+    suspend fun getBookDetailCache(ratingKey: String): BookDetailCacheEntity? =
+        bookDetailCacheDao.get(ratingKey)
+
+    /** Upsert the playback details produced by fetchBookDetail(). WRITE-ONLY-WHEN-USEFUL:
+     *  a row is only written when we actually learned something play() needs (a part key
+     *  or a track ratingKey or a positive duration) — a thin/empty detail response must
+     *  not overwrite a previously good row with blanks. REPLACE makes repeat writes
+     *  idempotent. */
+    suspend fun saveBookDetailCache(ratingKey: String, book: AudioBook) {
+        val hasUsefulData = !book.mediaKey.isNullOrBlank() ||
+                !book.trackRatingKey.isNullOrBlank() ||
+                book.duration > 0
+        if (!hasUsefulData) return
+        bookDetailCacheDao.upsert(
+            BookDetailCacheEntity(
+                ratingKey = ratingKey,
+                mediaPartKey = book.mediaKey,
+                allPartKeysCsv = book.allPartKeys.joinToString(","),
+                trackRatingKey = book.trackRatingKey,
+                trackDurationMs = book.trackDurationMs,
+                durationMs = book.duration,
+                thumbPath = book.thumbPath
+            )
+        )
     }
 
     fun searchLibrary(query: String): Flow<List<CachedLibraryEntity>> =
@@ -434,6 +543,17 @@ class PlexRepository @Inject constructor(
                     trackDurationMs = trackDurationMs
                 )
 
+                // Persist the freshly-fetched chapters to the local Room cache so EVERY
+                // subsequent play() of this book reads them instantly (offline-safe,
+                // chapter list stops flickering with network health). REPLACE-on-conflict
+                // makes this idempotent; saveChapters() internally skips empty lists so a
+                // failed/empty fetch can never clobber a previously good cache.
+                saveChapters(ratingKey, chapters)
+                // Persist the playback-critical fields (stream part key, part-key list,
+                // track ratingKey for /:/timeline, corrected duration) the same way — the
+                // next play() builds its stream URL straight from Room, no network.
+                saveBookDetailCache(ratingKey, book)
+
                 Result.Success(Pair(book, chapters))
             } catch (e: Exception) {
                 Result.Error("Network error: ${e.message}", e)
@@ -459,8 +579,8 @@ class PlexRepository @Inject constructor(
         val token = session.serverToken ?: session.authToken ?: return
         try {
             // Use /:/timeline (Chronicle-confirmed correct endpoint). Both args are the
-            // TRACK ratingKey (PlaybackManager.sendPlayIntent passes AudioBook.trackRatingKey
-            // into EXTRA_KEY). The `key` query param is the metadata key Plex resolves the
+            // TRACK ratingKey (PlaybackManager.play() passes AudioBook.trackRatingKey into
+            // the thin start item's X_TIMELINE_KEY extra → the service's currentKey). The `key` query param is the metadata key Plex resolves the
             // timeline entry by — always /library/metadata/{ratingKey}. We no longer trust
             // the caller's string shape (an earlier heuristic passed a /library/parts/…
             // part key through unchanged when it started with "/library", so Plex silently
@@ -483,6 +603,26 @@ class PlexRepository @Inject constructor(
             Log.w("PlexRepo", "reportTimeline failed: ${e.message}")
         }
     }
+
+    /**
+     * Search for a book by title or author in the in-memory Room cache first.
+     * Falls back to a server call only if nothing matches locally — this avoids
+     * a network round-trip for the common case where the Auto UI already knows
+     * what it's looking for (the search results are drawn from the same cached
+     * library table that backs the library grid).
+     */
+    suspend fun searchLibraryForAuto(query: String): List<CachedLibraryEntity> =
+        withContext(Dispatchers.IO) {
+            if (query.isBlank()) return@withContext emptyList()
+            // Fast path: match the cache that the library screen already uses
+            val cached = libraryDao.getAllBooks()
+            val needle = query.lowercase()
+            cached.filter {
+                it.title.lowercase().contains(needle) ||
+                it.author?.lowercase()?.contains(needle) == true
+            }
+        }
+
 
     // ── Downloads ───────────────────────────────────────────────────────────
 
@@ -552,3 +692,4 @@ class PlexRepository @Inject constructor(
      //   endMs = endTimeOffset
     //)
 }
+

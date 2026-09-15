@@ -9,7 +9,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.plexaudiobooks.R
@@ -65,9 +67,11 @@ class ServerSetupFragment : Fragment() {
             viewModel.connectManually(url)
         }
 
-        lifecycleScope.launch {
-            viewModel.step.collectLatest { step ->
-                renderStep(step)
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.step.collectLatest { step ->
+                    renderStep(step)
+                }
             }
         }
 

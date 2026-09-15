@@ -122,8 +122,8 @@ class PlayerSheetFragment : BottomSheetDialogFragment() {
     // ── State ─────────────────────────────────────────────────────────────────
 
     private fun observeState() {
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 playbackManager.state.collect { state ->
                     render(state)
                 }
@@ -131,8 +131,8 @@ class PlayerSheetFragment : BottomSheetDialogFragment() {
         }
         // Lightweight 500ms refresh so the seekbar advances while playing (the manager also
         // polls, but the sheet's own tick keeps the UI independent of callback timing).
-        lifecycleScope.launch {
-            repeatOnLifecycle(Lifecycle.State.STARTED) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 while (true) {
                     render(playbackManager.state.value)
                     delay(500)

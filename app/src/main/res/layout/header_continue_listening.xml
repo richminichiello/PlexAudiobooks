@@ -6,15 +6,33 @@
     android:layout_height="wrap_content"
     android:orientation="vertical">
 
-    <TextView
+    <LinearLayout
+        android:id="@+id/headerRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:paddingHorizontal="16dp"
         android:paddingTop="16dp"
         android:paddingBottom="8dp"
-        android:text="@string/continue_listening"
-        android:textSize="16sp"
-        android:textStyle="bold" />
+        android:background="?attr/selectableItemBackground">
+
+        <TextView
+            android:id="@+id/tvSectionTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/continue_listening"
+            android:textSize="16sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:id="@+id/ivCollapseChevron"
+            android:layout_width="24dp"
+            android:layout_height="24dp"
+            android:contentDescription="@string/collapse_section"
+            android:src="@android:drawable/arrow_down_float" />
+    </LinearLayout>
 
     <!-- Grid mode: horizontal carousel -->
     <androidx.recyclerview.widget.RecyclerView
@@ -35,19 +53,5 @@
         android:orientation="vertical"
         android:visibility="gone" />
 
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="1dp"
-        android:layout_marginVertical="8dp"
-        android:background="?attr/colorSurfaceVariant" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:paddingHorizontal="16dp"
-        android:paddingBottom="8dp"
-        android:text="@string/my_library"
-        android:textSize="16sp"
-        android:textStyle="bold" />
 
 </LinearLayout>
