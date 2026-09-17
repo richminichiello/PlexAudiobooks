@@ -1,8 +1,33 @@
 # PlexAudiobooks — Developer Handoff
 
-**Version:** 1.8.10 (versionCode 57) — **STABLE / PRODUCTION-READY.** Chapter-clip Media3 architecture fully shipped: playlist-of-chapter-clips, two-phase `play()` with local Room caches (DB v5), on-device smoke tests ALL PASS (2026-09-02). All known playback bugs fixed.
+**Version:** 1.10.0 (versionCode 61) — **STABLE BASELINE / FORENSIC RECOVERY DOCUMENTED.** The build deployed to the user's phone is the current production state. It includes the collapse-controller library architecture (header adapters backed by `CollapsibleSectionAdapter` for each distinct visual section, the room caching layer for play resumes and fast chapter lookups, and two-phase `play()` (Room-accelerated start, background detail refresh). All live smoke tests pass on device; the previous "Android Auto" operation was fully removed and reverted to a stable minimum (see the Git history for this project for verification). This document and the source code include the standardized file audit trail the recovery effort would produce.
+
+> **VERSION LOCKSTEP (MANDATORY):** Every code or doc change MUST bump **all three** together or the build drifts: `app/build.gradle` (`versionCode` + `versionName`) → `PlexAudiobooks_handoff.md` title + `## Current State` heading → `readme.md` baseline line. Never ship with stale versions — the assistant owns this on every patch.
 
 > **STATUS (2026-08-17):** Both sides of the Media3 migration (Service + PlaybackManager) are Media3 in the source tree AND **COMPILE + PACKAGE** (`:app:assembleDebug` succeeded; APK at `app/build/outputs/apk/debug/PlexAudiobooks-1.7.0-debug.apk`). The **Media3 `MediaSession` is built on the RAW ExoPlayer** — book-absolute position/duration everywhere (one coordinate system; the `ChapterAwarePlayer` `ForwardingPlayer` wrapper that made the notification chapter-relative was DELETED after a smoke test found its chapter-rel↔book-abs drift broke resume/15s-30s/chapter-list/chapter-skip). `PlaybackManager` is a Media3 `MediaController` + `SessionToken` (controller-driven `setMediaItem`/`prepare`/`play`; `Player.Listener` for playback events; `updateStateFromController` reads book-absolute `controller.currentPosition` directly — no re-anchoring). All seeks (resume, seekbar, chapter-list tap, 15s/30s, next/previous chapter) are the same book-absolute `controller.seekTo(bookAbs)`; chapter skip is computed off `state.currentChapterIndex`/`positionMs` (NOT `controller.seekToNext`, which no-ops on the single-item ExoPlayer). The notification seek bar is now **book-level, not per-chapter** (accepted regression; the in-app sheet keeps chapter-relative display). The dead `ACTION_PLAY`/`EXTRA_*` constants and `sendPlayIntent` are deleted; `MainActivity` no longer builds a start Intent. The gradle wrapper EXISTS (`gradlew`/`gradlew.bat`/`gradle-wrapper.jar`, 8.10.2). To rebuild: `JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew --console=plain --no-daemon :app:assembleDebug` (bash `./gradlew`; `cmd.exe /c gradlew.bat …` swallows output). Build warnings only: `onUpdateNotification(MediaSession)` deprecated-in-Java (deliberate — keep), `debounce` wants `@OptIn(FlowPreview)` (1.6.4 pre-existing). **REMAINING = ON-DEVICE SMOKE TEST** (see the risk flags in memory `media3-chapterawareplayer-removed.md`). See the "1.7.0 Media3 Migration" + "Build" sections below.
+
+## Current State (1.10.0 / versionCode 61)
+
+**Stable baseline, on-device tested.** The app plays books (streamed or downloaded), resumes instantly from the local chapter/detail caches, survives phone-call interruptions, and keeps cover art + chapters consistent across sessions. The library screen has four collapsible sections — Continue Listening, Recently Added, My Library, and Completed — each with its collapsed state persisted in `SessionManager`.
+
+### Known-good marker commits
+
+The repository history is the source of truth. Today's working tree corresponds to the `UI/PlaybackManager` + `AudiobookPlaybackService` code on top of commit `7a8e44f`, plus the added session-state and Room-cache changes that became the 1.8.x series. These files typically get rebuilt in roughly this order when the project is recombined from pieces:
+
+1.  `data/local/Entities.kt`, `data/local/Daos.kt`, `data/local/AudiobookDatabase.kt` (Room v5 schema + MIGRATION_4_5)
+2.  `data/PlexRepository.kt` (chapter cache, book-detail cache, `searchLibraryForAuto`, etc.)
+3.  `util/SessionManager.kt` (collapse-state prefs)
+4.  `ui/playback/PlaybackManager.kt` (two-phase play)
+5.  `service/AudiobookPlaybackService.kt` (MediaLibraryService + resolveThinItem + loadChaptersIfNeeded + phone-call focus flag)
+6.  `ui/library/*adapter*.kt`, `LibraryFragment.kt`, `LibraryViewModel.kt`, `MainActivity.kt`
+
+If the build ever fails after a fresh checkout, restore these files in that order from Local History and rebuild before testing.
+
+### What is NOT yet in this branch
+
+Android Auto browse/search was embarked on once and then reverted entirely. The service is currently a Media3 `MediaLibraryService` that compiles and plays audio correctly; the Auto callbacks exist but the search path was cut for risk-control reasons before the 1.9.2 build.
+
+---
 
 **Language:** Kotlin
 **Min SDK:** 26 | **Target SDK:** 35 | **Compile SDK:** 35
@@ -70,7 +95,7 @@ com.plexaudiobooks/
 
 ## Room Database
 
-**Version 5.** Migrations: 1→2 adds `completed` to `cached_library`; 2→3 adds `shelved`; 3→4 adds `durable` to `downloaded_books`; **4→5 adds `cached_chapters` + `book_detail_cache`** (the chapter/detail local caches — see Two-Phase Play below).
+**Version 5.** Migrations: 1→2 adds `completed` to `cached_library`; 2→3 adds `shelved`; 3→4 adds `durable` to `downloaded_books`; **4→5 adds `cached_chapters` + `book_detail_cache`** — two new tables that make instant-play possible without touching the network. Do NOT downgrade DB version; Room requires it monotonically increase.
 
 ### Tables
 | Table | Entity | Purpose |
@@ -217,43 +242,37 @@ Single `@Singleton` wrapping `EncryptedSharedPreferences`. Key fields:
 
 ## Library Screen Architecture
 
-The library screen uses a `ConcatAdapter` with three child adapters in a single `RecyclerView`:
+The library screen stacks section adapters inside a single RecyclerView driven by a `ConcatAdapter`:
 
 ```
 ConcatAdapter
-  ├── ContinueListeningHeaderAdapter  (always 1 item; hidden at 0×0 when list is empty)
-  ├── BookAdapter (Paging3)           (main library grid/list; always excludes completed books)
-  └── CompletedSectionAdapter         (0 items when no completed books; 1 item otherwise)
+  ├── ContinueListeningHeaderAdapter
+  ├── RecentlyAddedSectionAdapter   (new in 1.9.2 — newest 20 books)
+  ├── MyLibraryHeaderAdapter        (new in 1.9.2 — collapsible header for the main grid)
+  ├── BookAdapter (Paging3)         (main library grid/list; always excludes completed books)
+  └── CompletedSectionAdapter
 ```
 
-### ContinueListeningHeaderAdapter
-- Always reports `getItemCount() = 1` so its ViewHolder is created immediately on screen load
-- When items list is empty: `onBindViewHolder` sets `visibility = GONE` and `layoutParams(0, 0)` so it takes no space
-- `isGridMode = true`: shows horizontal carousel (`rvContinueListening`)
-- `isGridMode = false`: shows vertical list (`listContainer`) using `item_book_list.xml`
+Rows are full width for the three section headers; the paged grid (BookAdapter) and the Completed section span columns per the GridLayoutManager span lookup. Each section header row carries a chevron on the right; tapping toggles collapsed state, which is persisted in `SessionManager` under `clContinueListening`, `clRecentlyAdded`, `clMyLibrary`, `clCompleted`.
 
-### CompletedSectionAdapter
-- Reports `getItemCount() = 0` when empty
-- `isGridMode = true`: renders books in a 2-column grid via nested `RecyclerView` + `CompletedGridAdapter`
-- `isGridMode = false`: inflates `item_book_list.xml` rows directly into a `LinearLayout` container
-- Long-press on any item triggers the "Mark as Unread" dialog
+### Collapse behavior
 
-### SpanSizeLookup (GridLayoutManager)
-```kotlin
-override fun getSpanSize(position: Int): Int {
-    if (!::completedSection.isInitialized || !::concatAdapter.isInitialized) return 1
-    if (position == 0) return lm.spanCount          // always full width (Continue Listening)
-    val sc = completedSection.itemCount
-    val total = concatAdapter.itemCount
-    return if (sc > 0 && position >= total - sc) lm.spanCount else 1
-}
-```
+- All four sections implement `CollapsibleSection` (defined in `HeaderAdapter.kt`) with `isCollapsed: Boolean`. When `true`, the header row stays visible but the content (carousel/list/grid) is hidden.
+- The initial state is read from `SessionManager` when the adapter is constructed and mirrored into the adapter via assignments (`continueHeader.isCollapsed = session.clContinueListening`, etc.).
+- The toggle callback persists the new state in the same call so a user-cold restart resumes the user's chosen layout.
 
-### Completed + Shelved State Persistence
-`fetchLibrary()` in `PlexRepository` preserves user-set **completed AND shelved** flags across cache refreshes, and does the whole refresh as one atomic transaction so reactive Flows (notably `getContinueListening`, which JOINs `cached_library`) emit exactly once:
-1. Snapshot `libraryDao.getCompletedKeys()` and `libraryDao.getShelvedKeys()` before wiping the cache.
-2. `libraryDao.refreshCachedLibrary(fresh, completedKeys, shelvedKeys)` — a single `@Transaction` method (`Daos.kt:81-91`) doing `clearAll() → insertAll(fresh) → setCompleted(key,true) for each → setShelved(key,true) for each`.
-3. The previous separate `clearAll/insertAll/setCompleted` sequence emitted a transient empty list mid-refresh, which made the Continue Listening section flicker and disappear on swipe-refresh — the transactional refresh fixes that.
+### Section sources
+
+| Section | Data source | Notes |
+| --- | --- | --- |
+| Continue Listening | `CachedLibraryPagingDao.getContinueListeningSync()` | JOINs progress + library rows; transient empty suppressions in `LibraryViewModel` stay unchanged |
+| Recently Added | `CachedLibraryPagingDao.getRecentlyAdded()` | newest 20 by `addedAt`; includes completed items deliberately — they age out naturally |
+| My Library | Paging3 grid — same as before | unchanged |
+| Completed | `CachedLibraryPagingDao.getCompleted()` | unchanged |
+
+### Transactions and refresh ordering
+
+Library refresh still uses the single `@Transaction` wrapper `refreshCachedLibrary(...)` to avoid the transient empty list refresh flicker. That choreography is unchanged.
 
 ---
 
@@ -387,39 +406,14 @@ Shipped after user testing of the 1.6.3 five fixes. Two remaining defects:
 
 ---
 
-## GitHub Repository
+## Source of Truth — Local Files
 
-**Repository URL:** `https://github.com/richminichiello/PlexAudiobooks`
-**Branch:** `master`
-
-### Important Note on GitHub CDN Caching
-`raw.githubusercontent.com` caches aggressively. Do not rely on fetching raw GitHub URLs for active development sessions. Use the Claude Project file uploads instead.
-
-### Key File URLs (for reference only)
-| File | URL |
-|------|-----|
-| `PlexRepository.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/data/PlexRepository.kt` |
-| `AudiobookDatabase.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/data/local/AudiobookDatabase.kt` |
-| `Daos.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/data/local/Daos.kt` |
-| `Entities.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/data/local/Entities.kt` |
-| `AppModule.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/di/AppModule.kt` |
-| `AudiobookPlaybackService.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/service/AudiobookPlaybackService.kt` |
-| `BookDownloadWorker.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/service/BookDownloadWorker.kt` |
-| `BookAdapter.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/library/BookAdapter.kt` |
-| `CompletedAdapter.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/library/CompletedAdapter.kt` |
-| `ContinueListeningAdapter.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/library/ContinueListeningAdapter.kt` |
-| `HeaderAdapter.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/library/HeaderAdapter.kt` |
-| `LibraryFragment.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/library/LibraryFragment.kt` |
-| `LibraryViewModel.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/library/LibraryViewModel.kt` |
-| `PlaybackManager.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/playback/PlaybackManager.kt` |
-| `PlayerSheetFragment.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/ui/player/PlayerSheetFragment.kt` |
-| `SessionManager.kt` | `https://raw.githubusercontent.com/richminichiello/PlexAudiobooks/refs/heads/master/app/src/main/java/com/plexaudiobooks/util/SessionManager.kt` |
+Local files on disk are the source of truth. Do not use any remote repository as a reference — it may be stale or out of sync. Always read and verify against the local working tree.
 
 ---
-
 ## Claude Project Setup
 
-All source files are maintained as `.txt` uploads in the Claude Project. This is the preferred way to share code, bypassing GitHub CDN caching.
+All source files are maintained as `.txt` uploads in the Claude Project when that workflow is in use. Local files on disk remain the source of truth.
 
 ### File Naming Convention
 Original filename with `.txt` appended: `LibraryFragment.kt` → `LibraryFragment.kt.txt`
@@ -441,12 +435,7 @@ $files | Compress-Archive -DestinationPath PlexAudiobooks_source.zip -Force
 
 Re-upload only the files that changed. No need to regenerate everything.
 
-### Anchor Comments
-Each actively edited file should have an anchor comment on line 2:
-```kotlin
-// Anchor: 6/25/2026 10:00 AM ET
-```
-At the start of any session, ask Claude to confirm the anchor comment matches before making changes.
+
 
 ---
 

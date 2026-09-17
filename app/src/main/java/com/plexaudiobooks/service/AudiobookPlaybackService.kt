@@ -272,26 +272,28 @@ class AudiobookPlaybackService : MediaLibraryService() {
                         )
                         LibraryResult.ofItemList(ImmutableList.copyOf(items), params)
                     }
-                    "continue_listening" -> {
-                        val items = repository.getContinueListeningEntities()
-                        LibraryResult.ofItemList(
-                            ImmutableList.copyOf(items.map { continueItemToMediaItem(it) }),
-                            params
-                        )
-                    }
-                    "recently_added" -> {
-                        val items = repository.getRecentlyAddedCached()
-                        LibraryResult.ofItemList(
-                            ImmutableList.copyOf(items.map { bookToMediaItem(it) }),
-                            params
-                        )
-                    }
+                    "continue_listening",
+                    "recently_added",
                     "library" -> {
-                        val items = repository.getAllCachedBooks()
-                        LibraryResult.ofItemList(
-                            ImmutableList.copyOf(items.map { bookToMediaItem(it) }),
-                            params
-                        )
+                        if (!this@AudiobookPlaybackService.session.isLoggedIn) {
+                            LibraryResult.ofItemList(ImmutableList.of(), params)
+                        } else {
+                            val rawItems: List<MediaItem> = when (parentId) {
+                                "continue_listening" -> repository.getContinueListeningEntities()
+                                    .map { continueItemToMediaItem(it) }
+                                    .filter { it != MediaItem.EMPTY }
+                                "recently_added" -> repository.getRecentlyAddedCached()
+                                    .map { bookToMediaItem(it) }
+                                    .filter { it != MediaItem.EMPTY }
+                                else -> repository.getAllCachedBooks()
+                                    .map { bookToMediaItem(it) }
+                                    .filter { it != MediaItem.EMPTY }
+                            }
+                            val from = (page * pageSize).coerceAtLeast(0)
+                            val to = (from + pageSize).coerceAtMost(rawItems.size)
+                            val paged = if (from >= rawItems.size) emptyList() else rawItems.subList(from, to)
+                            LibraryResult.ofItemList(ImmutableList.copyOf(paged), params)
+                        }
                     }
                     else -> LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
                 }
@@ -320,9 +322,17 @@ class AudiobookPlaybackService : MediaLibraryService() {
             params: MediaLibraryService.LibraryParams?
         ): ListenableFuture<LibraryResult<Void>> {
             return guavaFuture {
-                val items = repository.searchLibraryForAuto(query)
-                session.notifySearchResultChanged(browser, query, items.size, params)
-                LibraryResult.ofVoid()
+                val trimmed = query.trim()
+                if (!this@AudiobookPlaybackService.session.isLoggedIn || trimmed.isBlank()) {
+                    session.notifySearchResultChanged(browser, query, 0, params)
+                    LibraryResult.ofVoid()
+                } else {
+                    val items = repository.searchLibraryForAuto(trimmed)
+                    // Cap browse notify count — Auto caps display anyway
+                    val count = items.size.coerceAtMost(50)
+                    session.notifySearchResultChanged(browser, query, count, params)
+                    LibraryResult.ofVoid()
+                }
             }
         }
 
@@ -335,11 +345,19 @@ class AudiobookPlaybackService : MediaLibraryService() {
             params: MediaLibraryService.LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
             return guavaFuture {
-                val items = repository.searchLibraryForAuto(query)
-                LibraryResult.ofItemList(
-                    ImmutableList.copyOf(items.map { bookToMediaItem(it) }),
-                    params
-                )
+                val trimmed = query.trim()
+                if (!this@AudiobookPlaybackService.session.isLoggedIn || trimmed.isBlank()) {
+                    LibraryResult.ofItemList(ImmutableList.of(), params)
+                } else {
+                    val all = repository.searchLibraryForAuto(trimmed)
+                        .map { bookToMediaItem(it) }
+                        .filter { it != MediaItem.EMPTY }
+                        .take(50)
+                    val from = (page * pageSize).coerceAtLeast(0)
+                    val to = (from + pageSize).coerceAtMost(all.size)
+                    val paged = if (from >= all.size) emptyList() else all.subList(from, to)
+                    LibraryResult.ofItemList(ImmutableList.copyOf(paged), params)
+                }
             }
         }
     }

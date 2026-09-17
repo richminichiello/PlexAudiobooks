@@ -23,8 +23,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The expanded Now Playing view, shown as a bottom-sheet overlay from MainActivity (and via
- * the Now Playing tab). It is NOT a nav destination and never lives on the back stack —
+ * The expanded Now Playing view, shown as a bottom-sheet overlay from MainActivity.
+ * It is NOT a nav destination and never lives on the back stack —
  * swipe-down or back dismisses it. All its state comes from the singleton [PlaybackManager];
  * there is no per-entry loadBook() re-probe and no fresh MediaBrowser connection (the
  * "playback dies, can't restart" root cause is gone because this fragment has no controller

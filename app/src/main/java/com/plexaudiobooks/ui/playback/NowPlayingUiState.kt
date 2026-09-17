@@ -4,8 +4,8 @@ import com.plexaudiobooks.data.model.AudioBook
 import com.plexaudiobooks.data.model.Chapter
 
 /**
- * Single source of truth for Now Playing, observed by the mini-player, the expanded
- * player sheet, and the Now Playing tab. Produced by PlaybackManager.
+ * Single source of truth for Now Playing, observed by the mini-player and the expanded
+ * player sheet. Produced by PlaybackManager.
  */
 data class NowPlayingUiState(
     val book: AudioBook? = null,

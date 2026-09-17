@@ -1,6 +1,6 @@
 # Plex Audiobooks — Android App
 
-A native Android audiobook player for your Plex server. Built with Kotlin, ExoPlayer/Media3, Room, Hilt, and Retrofit.
+A native Android audiobook player for your Plex server. Built with Kotlin, ExoPlayer/Media3, Room, Hilt, Retrofit, Paging3. Current baseline: 1.10.0 (versionCode 61).
 
 ---
 
@@ -9,6 +9,8 @@ A native Android audiobook player for your Plex server. Built with Kotlin, ExoPl
 - **Plex OAuth sign-in** — secure PIN-based login via plex.tv, no password ever stored
 - **Encrypted token storage** — auth token stored in Android EncryptedSharedPreferences (AES-256)
 - **Full library browsing** — grid/list view of all audiobooks with cover art, sortable by title / author / duration / date added
+- **Collapsible library sections** — Continue Listening, Recently Added, My Library, and Completed all collapse/expand with a chevron; position persists across app restarts
+- **Recently Added** — newest 20 books in your library (from the Room cache) below Continue Listening
 - **Continue Listening** — a section showing books you've started (horizontal carousel in grid mode, vertical list in list mode); long-press a book to **"Put this back on the shelf"** (hide it from Continue Listening without marking it read — resume position preserved, book stays visible in your library) or **"Mark as Read"**
 - **Completed section** — books you've finished collect at the bottom; long-press to mark a book Unread
 - **Mini-player + bottom navigation** — a mini-player bar sits above the bottom nav; tap to expand the full player. A 3-tab bottom nav (Library | Downloads | Settings) keeps each tab's own back-stack
@@ -131,6 +133,7 @@ Repository (PlexRepository) ─────► Room DB     MediaController (Medi
 - **Service stays `MediaSessionService` (Media3)**: the session is built on the **raw** `ExoPlayer` (no wrapper). Chapter-relative display is handled by the playlist itself — no `ChapterAwarePlayer` needed.
 - **Single source of truth**: Library data flows `API → Room → UI` via `Flow`. Completed/shelved flags re-applied atomically across refresh.
 - **Two-phase play (1.8.x)**: `play()` reads Room first (chapters + book detail cache) and starts audio instantly without a network call; then refreshes from the network in the background.
+- **Section collapse (1.9.2)**: Each section of the library screen (Continue Listening, Recently Added, My Library, Completed) has its own header row with a collapsible chevron; the four states persist per device.
 - **Progress persistence**: Position saved to Room every 10 seconds and to Plex (`/:/timeline`). On app kill/crash, progress is recovered from Room on next launch and re-synced to Plex.
 - **Offline routing**: `PlaybackManager.buildStreamUrl()` returns a `file://` URI when the resume position is within the downloaded window; otherwise streams from the server so ExoPlayer never seeks past the end of a truncated local file.
 - **Secure auth**: Plex tokens are never stored in plaintext. `EncryptedSharedPreferences` uses AES-256-GCM for values and AES-256-SIV for keys, backed by Android Keystore.
